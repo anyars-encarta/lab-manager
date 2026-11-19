@@ -432,8 +432,3 @@ api.patch("/nhia/claims/:id/status", requireRole("admin"), asyncRoute(async (req
   if (!updated) return res.status(404).json({ error: "Claim not found" });
   res.json(updated);
 }));
-
-// Routes
-api.get("/", (req, res) => {
-  res.send("Laboratory Backend server is running!");
-});

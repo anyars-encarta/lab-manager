@@ -13,6 +13,9 @@ app.use(cors({
 app.use("/api/auth", toNodeHandler(auth));
 app.use(express.json({ limit: "1mb" }));
 
+app.get("/", (_req, res) => {
+  res.send("Laboratory Backend server is running!");
+});
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api", api);
 
