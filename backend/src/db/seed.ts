@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { eq } from "drizzle-orm";
-import { auth } from "../auth";
-import { db } from "./index";
-import { users } from "./schema";
+import { auth } from "../auth.js";
+import { db } from "./index.js";
+import { users } from "./schema.js";
 
 const name = process.env.ADMIN_NAME;
 const email = (process.env.ADMIN_EMAIL!).toLowerCase();

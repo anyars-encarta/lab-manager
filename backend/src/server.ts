@@ -2,8 +2,8 @@ import "dotenv/config";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { toNodeHandler } from "better-auth/node";
-import { auth } from "./auth";
-import { api } from "./routes";
+import { auth } from "./auth.js";
+import { api } from "./routes.js";
 
 const app = express();
 app.use(cors({

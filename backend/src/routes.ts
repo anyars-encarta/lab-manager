@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
-import { auth } from "./auth";
+import { auth } from "./auth.js";
 import { db } from "./db";
 import {
   facilities,
