@@ -1,8 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { eq } from "drizzle-orm";
-import { auth } from "./auth";
+import { auth } from "./auth.js";
 import { db } from "./db";
-import { users } from "./db/schema";
+import { users } from "./db/schema.js";
 
 export type AppUser = typeof users.$inferSelect;
 
