@@ -205,6 +205,80 @@ api.post("/patients", requireRole("admin", "frontdesk"), asyncRoute(async (req, 
   res.status(201).json(created);
 }));
 
+api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncRoute(async (req, res) => {
+  const body = z.object({
+    facilityId: z.uuid(),
+    firstName: z.string().min(1),
+    lastName: z.string().min(1),
+    dateOfBirth: z.string().optional(),
+    gender: z.string().optional(),
+    phone: z.string().optional(),
+    email: z.email().optional(),
+    address: z.string().optional(),
+    nhisNumber: z.string().optional(),
+    nhisStatus: z.string().optional(),
+    clinicianName: z.string().optional(),
+    notes: z.string().optional(),
+    investigationIds: z.array(z.uuid()).min(1),
+  }).parse(req.body);
+
+  const uniqueInvestigationIds = [...new Set(body.investigationIds)];
+  const selected = await db.select().from(investigations).where(sql`${investigations.id} in ${uniqueInvestigationIds}`);
+  if (selected.length !== uniqueInvestigationIds.length) {
+    return res.status(400).json({ error: "One or more investigations are invalid" });
+  }
+  const inactive = selected.find((item) => !item.active);
+  if (inactive) {
+    return res.status(400).json({ error: "One or more investigations are inactive" });
+  }
+  const wrongFacility = selected.find((item) => item.facilityId !== body.facilityId);
+  if (wrongFacility) {
+    return res.status(400).json({ error: "Selected tests do not belong to the referral facility" });
+  }
+
+  const total = selected.reduce((sum, item) => sum + numberValue(item.price), 0);
+  const result = await db.transaction(async (tx) => {
+    const [patient] = await tx.insert(patients).values({
+      facilityId: body.facilityId,
+      patientNumber: prefixNumber("PAT"),
+      firstName: body.firstName,
+      lastName: body.lastName,
+      dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : null,
+      gender: body.gender,
+      phone: body.phone,
+      email: body.email,
+      address: body.address,
+      nhisNumber: body.nhisNumber,
+      nhisStatus: body.nhisStatus,
+    }).returning();
+
+    const [order] = await tx.insert(labOrders).values({
+      orderNumber: prefixNumber("LAB"),
+      patientId: patient.id,
+      facilityId: body.facilityId,
+      createdBy: req.appUser!.id,
+      clinicianName: body.clinicianName,
+      notes: body.notes,
+      totalAmount: total.toFixed(2),
+    }).returning();
+
+    await tx.insert(orderItems).values(selected.map((item) => ({
+      orderId: order.id,
+      investigationId: item.id,
+      quantity: 1,
+      unitPrice: item.price,
+      lineTotal: item.price,
+    })));
+
+    return { patient, order };
+  });
+
+  res.status(201).json({
+    ...result,
+    totalAmount: total.toFixed(2),
+  });
+}));
+
 api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, res) => {
   const body = z.object({
     facilityId: z.uuid(),
@@ -219,6 +293,12 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
   }
   const inactive = selected.find((item) => !item.active);
   if (inactive) return res.status(400).json({ error: "One or more investigations are inactive" });
+
+  const patient = await db.query.patients.findFirst({ where: eq(patients.id, body.patientId) });
+  if (!patient) return res.status(404).json({ error: "Patient not found" });
+  if (patient.facilityId !== body.facilityId) return res.status(400).json({ error: "Patient and referring facility do not match" });
+  const wrongFacility = selected.find((item) => item.facilityId !== body.facilityId);
+  if (wrongFacility) return res.status(400).json({ error: "Selected tests do not belong to the referral facility" });
 
   const total = selected.reduce((sum, item) => sum + numberValue(item.price), 0);
   const [order] = await db.insert(labOrders).values({
