@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import {
@@ -11,6 +12,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/refine-ui/layout/breadcrumb";
+import { Button } from "@/components/ui/button";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -21,22 +23,50 @@ export function Dashboard() {
   const { data: identity } = useGetIdentity<Identity>();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const [ordersError, setOrdersError] = useState("");
+
+  const loadSummary = async () => {
+    setSummaryError("");
+    try {
+      const response = await fetch(`${API_URL}/api/reports/summary`, { credentials: "include" });
+      if (!response.ok) throw new Error(`Summary request failed (${response.status})`);
+      const data = await response.json();
+      setSummary(data);
+    } catch (error) {
+      setSummary(null);
+      setSummaryError(error instanceof Error ? error.message : "Unable to load summary");
+    }
+  };
+
+  const loadOrders = async () => {
+    setOrdersError("");
+    setOrdersLoaded(false);
+    try {
+      const response = await fetch(`${API_URL}/api/orders`, { credentials: "include" });
+      if (!response.ok) throw new Error(`Orders request failed (${response.status})`);
+      const data = await response.json();
+      if (!Array.isArray(data)) throw new Error("Invalid orders response");
+      setOrders(data.slice(0, 6));
+      setOrdersLoaded(true);
+    } catch (error) {
+      setOrders([]);
+      setOrdersLoaded(false);
+      setOrdersError(error instanceof Error ? error.message : "Unable to load orders");
+    }
+  };
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${API_URL}/api/reports/summary`, { credentials: "include" }).then((r) => r.ok ? r.json() : null),
-      fetch(`${API_URL}/api/orders`, { credentials: "include" }).then((r) => r.ok ? r.json() : []),
-    ]).then(([report, orderRows]) => {
-      setSummary(report);
-      setOrders(orderRows.slice(0, 6));
-    });
+    void loadSummary();
+    void loadOrders();
   }, []);
 
   const cards = [
     { title: "Total orders", value: summary?.totalOrders ?? "—", detail: "Selected period", icon: ClipboardCheck, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
     { title: "Completed", value: summary?.completed ?? "—", detail: "Released reports", icon: FlaskConical, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
     { title: "Pending", value: summary?.pending ?? "—", detail: "Active workflow", icon: Activity, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
-    { title: "Collected", value: `GH₵ ${(summary?.totalCollected ?? 0).toLocaleString()}`, detail: "Payments received", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
+    { title: "Collected", value: summary ? `GH₵ ${Number(summary.totalCollected).toLocaleString()}` : "—", detail: "Payments received", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
   ];
 
   return (
@@ -65,13 +95,25 @@ export function Dashboard() {
         ))}
       </section>
 
+      {(summaryError || ordersError) && (
+        <div className="flex flex-wrap gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+          {summaryError && <div className="flex-1">Summary unavailable: {summaryError}</div>}
+          {ordersError && <div className="flex-1">Orders unavailable: {ordersError}</div>}
+          <Button size="sm" variant="outline" onClick={() => { void loadSummary(); void loadOrders(); }}>Retry</Button>
+        </div>
+      )}
+
       <section className="grid gap-4 lg:grid-cols-[1.6fr_0.7fr]">
         <Card className="overflow-hidden">
           <CardHeader className="border-b">
             <CardTitle className="text-base">Recent laboratory orders</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {orders.length === 0 ? (
+            {!ordersLoaded ? (
+              <div className="grid place-items-center py-16 text-sm text-muted-foreground">
+                {ordersError ? "Orders could not be loaded" : "Loading orders..."}
+              </div>
+            ) : orders.length === 0 ? (
               <div className="grid place-items-center py-16 text-sm text-muted-foreground">No laboratory orders yet</div>
             ) : (
               <div className="divide-y">

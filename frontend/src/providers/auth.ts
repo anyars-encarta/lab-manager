@@ -10,6 +10,9 @@ export type LabUser = {
   image?: string;
 };
 
+let establishedAuthenticated = false;
+let completedAuthProbe = false;
+
 const request = async (path: string, options: RequestInit = {}) => {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -50,22 +53,47 @@ export const authProvider: AuthProvider = {
       };
     }
     await request("/api/me");
+    establishedAuthenticated = true;
+    completedAuthProbe = true;
     return { success: true, redirectTo: "/" };
   },
   logout: async () => {
-    await fetch(`${API_URL}/api/auth/sign-out`, {
+    const response = await fetch(`${API_URL}/api/auth/sign-out`, {
       method: "POST",
       credentials: "include",
-    }).catch(() => undefined);
+    }).catch(() => null);
+    if (!response || !response.ok) {
+      return {
+        success: false,
+        error: new Error("Unable to sign out. Check your connection and retry."),
+      };
+    }
+    establishedAuthenticated = false;
+    completedAuthProbe = true;
     return { success: true, redirectTo: "/login" };
   },
   check: async () => {
+    let response: Response;
     try {
-      await request("/api/me");
-      return { authenticated: true };
+      response = await fetch(`${API_URL}/api/me`, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
     } catch {
+      if (completedAuthProbe && establishedAuthenticated) {
+        return { authenticated: true, error: new Error("Unable to verify session; preserving the current session") };
+      }
+      return { authenticated: false, error: new Error("Unable to check authentication") };
+    }
+    if (response.ok) {
+      establishedAuthenticated = true;
+      completedAuthProbe = true;
+      return { authenticated: true };
+    }
+    if (response.status === 401 || response.status === 403) {
       return { authenticated: false, redirectTo: "/login" };
     }
+    return { authenticated: true, error: new Error(`Session check failed (${response.status})`) };
   },
   getIdentity: async () => {
     const result = await request("/api/me");

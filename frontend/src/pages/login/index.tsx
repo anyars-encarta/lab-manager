@@ -75,7 +75,7 @@ export const Login = () => {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
-                <InputPassword value={password} onChange={(e) => setPassword(e.target.value)} required />
+                <InputPassword id="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
               </div>
               {error && <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
               <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" size="lg" type="submit" disabled={isPending}>

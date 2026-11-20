@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useRef, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import {
   Building2,
@@ -20,12 +21,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 type Props = { section: "patients" | "orders" | "investigations" | "facilities" | "users" | "reports" | "claims" };
-type Identity = { role?: string };
 
 const titles = {
   patients: ["Patients", "Register and find patient records", Users],
@@ -38,7 +37,13 @@ const titles = {
 } as const;
 
 export function LaboratoryWorkspace({ section }: Props) {
-  const { data: identity } = useGetIdentity<Identity>();
+  const { data: identity } = useGetIdentity<{ role?: "admin" | "frontdesk" | "account" | "technician" | "doctor" }>();
+  const role = identity?.role;
+  const canCreate =
+    role === "admin" ||
+    (section === "patients" && role === "frontdesk") ||
+    (section === "orders" && role === "frontdesk") ||
+    (section === "reports" && role === "doctor");
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -47,10 +52,17 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [message, setMessage] = useState("");
   const [facilities, setFacilities] = useState<any[]>([]);
   const [investigations, setInvestigations] = useState<any[]>([]);
+  const [patients, setPatients] = useState<any[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [submissionError, setSubmissionError] = useState("");
+  const requestGeneration = useRef(0);
   const [TitleIcon] = [titles[section][2]];
 
   const load = async () => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
+    setLoadError("");
+    setRows([]);
     try {
       const paths: Record<Props["section"], string> = {
         patients: "/api/patients",
@@ -62,25 +74,63 @@ export function LaboratoryWorkspace({ section }: Props) {
         claims: "/api/nhia/claims",
       };
       const response = await fetch(`${API_URL}${paths[section]}`, { credentials: "include" });
+      if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
+      if (generation !== requestGeneration.current) return;
       setRows(Array.isArray(data) ? data : data ? [data] : []);
       if (section !== "facilities") {
-        fetch(`${API_URL}/api/facilities`, { credentials: "include" }).then((r) => r.json()).then((d) => setFacilities(Array.isArray(d) ? d : []));
+        try {
+          const lookupResponse = await fetch(`${API_URL}/api/facilities`, { credentials: "include" });
+          if (!lookupResponse.ok) throw new Error("Unable to load facilities");
+          const facilitiesData = await lookupResponse.json();
+          if (generation === requestGeneration.current) setFacilities(Array.isArray(facilitiesData) ? facilitiesData : []);
+        } catch (error) {
+          if (generation === requestGeneration.current) setLoadError(error instanceof Error ? error.message : "Unable to load lookup data");
+        }
       }
       if (section === "orders") {
-        fetch(`${API_URL}/api/investigations`, { credentials: "include" }).then((r) => r.json()).then((d) => setInvestigations(Array.isArray(d) ? d : []));
+        try {
+          const [investigationResponse, patientResponse] = await Promise.all([
+            fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
+            fetch(`${API_URL}/api/patients`, { credentials: "include" }),
+          ]);
+          if (!investigationResponse.ok) throw new Error("Unable to load investigations");
+          if (!patientResponse.ok) throw new Error("Unable to load patients");
+          const [investigationsData, patientsData] = await Promise.all([
+            investigationResponse.json(),
+            patientResponse.json(),
+          ]);
+          if (generation === requestGeneration.current) {
+            setInvestigations(Array.isArray(investigationsData) ? investigationsData : []);
+            setPatients(Array.isArray(patientsData) ? patientsData : []);
+          }
+        } catch (error) {
+          if (generation === requestGeneration.current) setLoadError(error instanceof Error ? error.message : "Unable to load lookup data");
+        }
+      }
+    } catch (error) {
+      if (generation === requestGeneration.current) {
+        setRows([]);
+        setLoadError(error instanceof Error ? error.message : "Unable to load records");
       }
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, [section]);
+  useEffect(() => {
+    setRows([]);
+    setLoadError("");
+    setSubmissionError("");
+    setSearch("");
+    void load();
+  }, [section]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSaving(true);
     setMessage("");
+    setSubmissionError("");
     const form = new FormData(event.currentTarget);
     const values = Object.fromEntries(form.entries());
     const pathMap: Partial<Record<Props["section"], string>> = {
@@ -104,6 +154,10 @@ export function LaboratoryWorkspace({ section }: Props) {
         const response = await fetch(`${API_URL}/api/reports/summary?from=${values.from}&to=${values.to}`, { credentials: "include" });
         if (!response.ok) throw new Error("Unable to generate report");
         setRows([await response.json()]);
+        setMessage("Report generated successfully");
+        setDialogOpen(false);
+        setSaving(false);
+        return;
       } else if (section === "claims") {
         const response = await fetch(`${API_URL}/api/nhia/claims`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ facilityId: values.facilityId, claimPeriodStart: new Date(`${values.from}T00:00:00Z`).toISOString(), claimPeriodEnd: new Date(`${values.to}T23:59:59Z`).toISOString() }) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to generate claim");
@@ -120,7 +174,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       setDialogOpen(false);
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save record");
+      setSubmissionError(error instanceof Error ? error.message : "Unable to save record");
     } finally {
       setSaving(false);
     }
@@ -138,13 +192,13 @@ export function LaboratoryWorkspace({ section }: Props) {
           <h1 className="mt-1 flex items-center gap-2 text-3xl font-semibold tracking-tight"><TitleIcon className="h-7 w-7" />{title}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         </div>
-        {["patients", "orders", "investigations", "facilities", "users", "claims"].includes(section) && (
+        {canCreate && ["patients", "orders", "investigations", "facilities", "users", "reports", "claims"].includes(section) && (
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild><Button className="gap-2"><Plus className="h-4 w-4" />{section === "claims" ? "Generate claim" : `New ${section === "investigations" ? "investigation" : section === "users" ? "user" : section === "facilities" ? "facility" : section.slice(0, -1)}`}</Button></DialogTrigger>
+            <DialogTrigger asChild><Button className="gap-2"><Plus className="h-4 w-4" />{section === "claims" ? "Generate claim" : section === "reports" ? "Generate report" : `New ${section === "investigations" ? "investigation" : section === "users" ? "user" : section === "facilities" ? "facility" : section.slice(0, -1)}`}</Button></DialogTrigger>
             <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
               <form onSubmit={submit}>
                 <DialogHeader>
-                  <DialogTitle>{section === "claims" ? "Generate NHIA claim" : `Create ${section === "investigations" ? "investigation" : section === "users" ? "user" : section === "facilities" ? "facility" : section.slice(0, -1)}`}</DialogTitle>
+                  <DialogTitle>{section === "claims" ? "Generate NHIA claim" : section === "reports" ? "Generate laboratory report" : `Create ${section === "investigations" ? "investigation" : section === "users" ? "user" : section === "facilities" ? "facility" : section.slice(0, -1)}`}</DialogTitle>
                   <DialogDescription>Complete the information below.</DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-5">
@@ -159,10 +213,11 @@ export function LaboratoryWorkspace({ section }: Props) {
                     <RoleField />
                   </>}
                   {section === "facilities" && <><Field name="name" label="Facility name" required /><Field name="code" label="Facility code" /><Field name="address" label="Address" /><Field name="phone" label="Phone" /><Field name="nhiaFacilityCode" label="NHIA facility code" /></>}
-                  {section === "investigations" && <><FacilityField facilities={facilities} /><Field name="code" label="Test code" required /><Field name="name" label="Investigation name" required /><Field name="category" label="Category" /><Field name="specimenType" label="Specimen type" /><Field name="price" label="Price (GH₵)" type="number" required /><Field name="nhiaCode" label="NHIA code" /></>}
-                  {section === "orders" && <><FacilityField facilities={facilities} /><Field name="patientId" label="Patient ID" required /><Field name="clinicianName" label="Clinician" /><InvestigationField investigations={investigations} /></>}
+                  {section === "investigations" && <><FacilityField facilities={facilities} /><Field name="code" label="Test code" required /><Field name="name" label="Investigation name" required /><Field name="category" label="Category" /><Field name="specimenType" label="Specimen type" /><Field name="price" label="Price (GH₵)" type="number" step="0.01" required /><Field name="nhiaCode" label="NHIA code" /></>}
+                  {section === "orders" && <><FacilityField facilities={facilities} /><PatientField patients={patients} /><Field name="clinicianName" label="Clinician" /><InvestigationField investigations={investigations} /></>}
                   {(section === "claims" || section === "reports") && <><FacilityField facilities={facilities} /><div className="grid grid-cols-2 gap-3"><Field name="from" label="From" type="date" required /><Field name="to" label="To" type="date" required /></div></>}
                 </div>
+                {submissionError && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{submissionError}</p>}
                 <DialogFooter><Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button></DialogFooter>
               </form>
             </DialogContent>
@@ -170,6 +225,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         )}
       </section>
 
+      {loadError && <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm"><span>{loadError}</span><Button size="sm" variant="outline" onClick={() => void load()}>Retry</Button></div>}
       {message && <p className="rounded-md border bg-muted px-3 py-2 text-sm">{message}</p>}
 
       {section === "reports" ? <ReportView row={rows[0]} /> : (
@@ -189,8 +245,8 @@ export function LaboratoryWorkspace({ section }: Props) {
   );
 }
 
-function Field({ name, label, type = "text", required = false }: { name: string; label: string; type?: string; required?: boolean }) {
-  return <div className="space-y-2"><Label htmlFor={name}>{label}</Label><Input id={name} name={name} type={type} required={required} /></div>;
+function Field({ name, label, type = "text", required = false, step }: { name: string; label: string; type?: string; required?: boolean; step?: number | string }) {
+  return <div className="space-y-2"><Label htmlFor={name}>{label}</Label><Input id={name} name={name} type={type} required={required} step={step} /></div>;
 }
 
 function FacilityField({ facilities }: { facilities: any[] }) {
@@ -199,6 +255,10 @@ function FacilityField({ facilities }: { facilities: any[] }) {
 
 function RoleField() {
   return <div className="space-y-2"><Label>Role</Label><Select name="role" required><SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger><SelectContent>{["admin", "frontdesk", "account", "technician", "doctor"].map((role) => <SelectItem key={role} value={role}>{role}</SelectItem>)}</SelectContent></Select></div>;
+}
+
+function PatientField({ patients }: { patients: any[] }) {
+  return <div className="space-y-2"><Label htmlFor="patientId">Patient</Label><Select name="patientId" required><SelectTrigger id="patientId"><SelectValue placeholder="Select patient" /></SelectTrigger><SelectContent>{patients.map((patient) => <SelectItem key={patient.id} value={patient.id}>{patient.firstName} {patient.lastName} — {patient.patientNumber}</SelectItem>)}</SelectContent></Select></div>;
 }
 
 function InvestigationField({ investigations }: { investigations: any[] }) {
