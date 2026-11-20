@@ -39,29 +39,43 @@ export function PatientsPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const [patientResponse, facilityResponse, investigationResponse] = await Promise.all([
-        fetch(`${API_URL}/api/patients`, { credentials: "include" }),
-        fetch(`${API_URL}/api/facilities`, { credentials: "include" }),
-        fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
-      ]);
-      if (!patientResponse.ok || !facilityResponse.ok || !investigationResponse.ok) {
-        throw new Error("Unable to load patient registration data");
-      }
-      const [patientData, facilityData, investigationData] = await Promise.all([
-        patientResponse.json(),
-        facilityResponse.json(),
-        investigationResponse.json(),
-      ]);
+      const patientResponse = await fetch(`${API_URL}/api/patients`, { credentials: "include" });
+      if (!patientResponse.ok) throw new Error(`Unable to load patient records (${patientResponse.status})`);
+      const patientData = await patientResponse.json();
       if (generation !== requestGeneration.current) return;
       setPatients(Array.isArray(patientData) ? patientData : []);
-      setFacilities(Array.isArray(facilityData) ? facilityData : []);
-      setInvestigations(Array.isArray(investigationData) ? investigationData : []);
     } catch (loadFailure) {
       if (generation === requestGeneration.current) {
-        setLoadError(loadFailure instanceof Error ? loadFailure.message : "Unable to load patient data");
+        setPatients([]);
+        setLoadError(loadFailure instanceof Error ? loadFailure.message : "Unable to load patient records");
       }
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
+    }
+
+    const lookupGeneration = requestGeneration.current;
+    const lookupResults = await Promise.allSettled([
+      fetch(`${API_URL}/api/facilities`, { credentials: "include" }),
+      fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
+    ]);
+    if (lookupGeneration !== requestGeneration.current) return;
+
+    const [facilityResult, investigationResult] = lookupResults;
+    const lookupErrors: string[] = [];
+    if (facilityResult.status === "fulfilled" && facilityResult.value.ok) {
+      const facilityData = await facilityResult.value.json().catch(() => null);
+      setFacilities(Array.isArray(facilityData) ? facilityData : []);
+    } else {
+      lookupErrors.push("Referring facilities are unavailable");
+    }
+    if (investigationResult.status === "fulfilled" && investigationResult.value.ok) {
+      const investigationData = await investigationResult.value.json().catch(() => null);
+      setInvestigations(Array.isArray(investigationData) ? investigationData : []);
+    } else {
+      lookupErrors.push("Investigations are unavailable");
+    }
+    if (lookupErrors.length > 0) {
+      setLoadError((current) => current ? `${current}. ${lookupErrors.join(". ")}` : lookupErrors.join(". "));
     }
   };
 

@@ -42,6 +42,8 @@ export function ReferringFacilitiesPage() {
   const [submissionError, setSubmissionError] = useState("");
   const [editing, setEditing] = useState<Facility | null>(null);
   const [form, setForm] = useState(emptyFacility);
+  const [originalForm, setOriginalForm] = useState(emptyFacility);
+  const editorSession = useRef(0);
   const requestGeneration = useRef(0);
 
   const load = async () => {
@@ -69,46 +71,67 @@ export function ReferringFacilitiesPage() {
   }, []);
 
   const openCreate = () => {
+    if (saving) return;
+    editorSession.current += 1;
     setEditing(null);
     setForm(emptyFacility);
+    setOriginalForm(emptyFacility);
     setSubmissionError("");
     setDialogOpen(true);
   };
 
   const openEdit = (facility: Facility) => {
-    setEditing(facility);
-    setForm({
+    if (saving) return;
+    editorSession.current += 1;
+    const nextForm = {
       name: facility.name || "",
       code: facility.code || "",
       address: facility.address || "",
       phone: facility.phone || "",
       email: facility.email || "",
       nhiaFacilityCode: facility.nhiaFacilityCode || "",
-    });
+    };
+    setEditing(facility);
+    setForm(nextForm);
+    setOriginalForm(nextForm);
     setSubmissionError("");
     setDialogOpen(true);
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (saving) return;
+    const session = ++editorSession.current;
+    const editor = editing?.id || null;
     setSaving(true);
     setSubmissionError("");
     try {
+      const payload: Record<string, unknown> = {};
+      for (const key of ["name", "address", "phone", "nhiaFacilityCode"] as const) {
+        if (form[key] !== originalForm[key]) payload[key] = form[key] === "" ? null : form[key];
+      }
+      if (form.code !== originalForm.code) payload.code = form.code === "" ? null : form.code;
+      if (form.email !== originalForm.email) {
+        payload.email = form.email === "" ? null : form.email;
+      }
+
       const response = await fetch(
-        editing ? `${API_URL}/api/facilities/${editing.id}` : `${API_URL}/api/facilities`,
+        editor ? `${API_URL}/api/facilities/${editor}` : `${API_URL}/api/facilities`,
         {
           method: editing ? "PATCH" : "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
+          body: JSON.stringify(editor ? payload : form),
         },
       );
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || "Unable to save referring facility");
-      setDialogOpen(false);
+      if (session === editorSession.current) setDialogOpen(false);
       await load();
     } catch (error) {
-      setSubmissionError(error instanceof Error ? error.message : "Unable to save referring facility");
+      if (session === editorSession.current) {
+        setSubmissionError(error instanceof Error ? error.message : "Unable to save referring facility");
+      }
     } finally {
       setSaving(false);
     }

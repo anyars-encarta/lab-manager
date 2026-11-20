@@ -75,7 +75,7 @@ api.post("/facilities", requireRole("admin"), asyncRoute(async (req, res) => {
     code: z.string().optional(),
     address: z.string().optional(),
     phone: z.string().optional(),
-    email: z.email().optional(),
+    email: z.union([z.email(), z.literal("")]).optional(),
     nhiaFacilityCode: z.string().optional(),
     settings: z.record(z.string(), z.unknown()).optional(),
   }).parse(req.body);
@@ -86,11 +86,11 @@ api.post("/facilities", requireRole("admin"), asyncRoute(async (req, res) => {
 api.patch("/facilities/:id", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2).optional(),
-    code: z.string().optional(),
+    code: z.string().nullable().optional(),
     address: z.string().optional(),
     phone: z.string().optional(),
-    email: z.email().optional(),
-    nhiaFacilityCode: z.string().optional(),
+    email: z.union([z.email(), z.literal("")]).nullable().optional(),
+    nhiaFacilityCode: z.string().nullable().optional(),
     settings: z.record(z.string(), z.unknown()).optional(),
   }).parse(req.body);
   const id = String(req.params.id);
