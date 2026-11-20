@@ -27,6 +27,7 @@ import { Dashboard } from "./pages/dashboard/dashboard";
 import { LaboratoryWorkspace } from "./pages/dashboard/workspace";
 import { PatientsPage } from "./pages/patients/patients";
 import { ReferringFacilitiesPage } from "./pages/facilities/referring-facilities";
+import { InvestigationsPage } from "./pages/investigations/investigations";
 import { Login } from "./pages/login";
 import { authProvider } from "./providers/auth";
 import { dataProvider } from "./providers/data";
@@ -66,6 +67,9 @@ function ResourceGuard({
   }
   if (allowed && resource === "facilities") {
     return <ReferringFacilitiesPage />;
+  }
+  if (allowed && resource === "investigations") {
+    return <InvestigationsPage />;
   }
   return allowed ? <LaboratoryWorkspace section={section} /> : <AccessDenied />;
 }

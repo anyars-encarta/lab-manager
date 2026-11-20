@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -126,9 +127,15 @@ export function ReferringFacilitiesPage() {
       );
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || "Unable to save referring facility");
+      toast.success(editing ? "Referring facility updated" : "Referring facility created", {
+        description: `${form.name} was saved successfully.`,
+      });
       if (session === editorSession.current) setDialogOpen(false);
       await load();
     } catch (error) {
+      toast.error("Unable to save referring facility", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
       if (session === editorSession.current) {
         setSubmissionError(error instanceof Error ? error.message : "Unable to save referring facility");
       }
