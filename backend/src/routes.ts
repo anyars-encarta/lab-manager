@@ -79,7 +79,11 @@ api.post("/facilities", requireRole("admin"), asyncRoute(async (req, res) => {
     nhiaFacilityCode: z.string().optional(),
     settings: z.record(z.string(), z.unknown()).optional(),
   }).parse(req.body);
-  const [created] = await db.insert(facilities).values(body).returning();
+  const normalizedBody = {
+    ...body,
+    code: body.code?.trim() || null,
+  };
+  const [created] = await db.insert(facilities).values(normalizedBody).returning();
   res.status(201).json(created);
 }));
 
@@ -87,8 +91,8 @@ api.patch("/facilities/:id", requireRole("admin"), asyncRoute(async (req, res) =
   const body = z.object({
     name: z.string().min(2).optional(),
     code: z.string().nullable().optional(),
-    address: z.string().optional(),
-    phone: z.string().optional(),
+    address: z.string().nullable().optional(),
+    phone: z.string().nullable().optional(),
     email: z.union([z.email(), z.literal("")]).nullable().optional(),
     nhiaFacilityCode: z.string().nullable().optional(),
     settings: z.record(z.string(), z.unknown()).optional(),

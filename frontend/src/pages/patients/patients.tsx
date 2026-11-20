@@ -53,7 +53,7 @@ export function PatientsPage() {
       if (generation === requestGeneration.current) setLoading(false);
     }
 
-    const lookupGeneration = requestGeneration.current;
+    const lookupGeneration = generation;
     const lookupResults = await Promise.allSettled([
       fetch(`${API_URL}/api/facilities`, { credentials: "include" }),
       fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
@@ -63,18 +63,30 @@ export function PatientsPage() {
     const [facilityResult, investigationResult] = lookupResults;
     const lookupErrors: string[] = [];
     if (facilityResult.status === "fulfilled" && facilityResult.value.ok) {
-      const facilityData = await facilityResult.value.json().catch(() => null);
-      setFacilities(Array.isArray(facilityData) ? facilityData : []);
+      try {
+        const facilityData = await facilityResult.value.json();
+        if (lookupGeneration === requestGeneration.current) {
+          setFacilities(Array.isArray(facilityData) ? facilityData : []);
+        }
+      } catch {
+        if (lookupGeneration === requestGeneration.current) lookupErrors.push("Referring facilities returned invalid data");
+      }
     } else {
-      lookupErrors.push("Referring facilities are unavailable");
+      if (lookupGeneration === requestGeneration.current) lookupErrors.push("Referring facilities are unavailable");
     }
     if (investigationResult.status === "fulfilled" && investigationResult.value.ok) {
-      const investigationData = await investigationResult.value.json().catch(() => null);
-      setInvestigations(Array.isArray(investigationData) ? investigationData : []);
+      try {
+        const investigationData = await investigationResult.value.json();
+        if (lookupGeneration === requestGeneration.current) {
+          setInvestigations(Array.isArray(investigationData) ? investigationData : []);
+        }
+      } catch {
+        if (lookupGeneration === requestGeneration.current) lookupErrors.push("Investigations returned invalid data");
+      }
     } else {
-      lookupErrors.push("Investigations are unavailable");
+      if (lookupGeneration === requestGeneration.current) lookupErrors.push("Investigations are unavailable");
     }
-    if (lookupErrors.length > 0) {
+    if (lookupGeneration === requestGeneration.current && lookupErrors.length > 0) {
       setLoadError((current) => current ? `${current}. ${lookupErrors.join(". ")}` : lookupErrors.join(". "));
     }
   };
