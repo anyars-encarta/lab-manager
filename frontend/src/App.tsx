@@ -25,6 +25,8 @@ import { useNotificationProvider } from "./components/refine-ui/notification/use
 import { ThemeProvider } from "./components/refine-ui/theme/theme-provider";
 import { Dashboard } from "./pages/dashboard/dashboard";
 import { LaboratoryWorkspace } from "./pages/dashboard/workspace";
+import { PatientsPage } from "./pages/patients/patients";
+import { ReferringFacilitiesPage } from "./pages/facilities/referring-facilities";
 import { Login } from "./pages/login";
 import { authProvider } from "./providers/auth";
 import { dataProvider } from "./providers/data";
@@ -59,6 +61,12 @@ function ResourceGuard({
     (resource === "orders" && ["frontdesk", "account", "technician"].includes(role || "")) ||
     (resource === "investigations" && ["frontdesk", "technician"].includes(role || "")) ||
     (resource === "reports" && role === "doctor");
+  if (allowed && resource === "patients") {
+    return <PatientsPage />;
+  }
+  if (allowed && resource === "facilities") {
+    return <ReferringFacilitiesPage />;
+  }
   return allowed ? <LaboratoryWorkspace section={section} /> : <AccessDenied />;
 }
 
@@ -105,7 +113,7 @@ function App() {
                 { name: "patients", list: "/patients", meta: { label: "Patients", icon: <Users /> } },
                 { name: "orders", list: "/orders", meta: { label: "Lab Orders", icon: <ClipboardList /> } },
                 { name: "investigations", list: "/investigations", meta: { label: "Investigations", icon: <Microscope /> } },
-                { name: "facilities", list: "/facilities", meta: { label: "Facilities", icon: <Building2 /> } },
+                { name: "facilities", list: "/facilities", meta: { label: "Referring Facilities", icon: <Building2 /> } },
                 { name: "users", list: "/users", meta: { label: "User Management", icon: <UserCog />, canDelete: false } },
                 { name: "reports", list: "/reports", meta: { label: "Reports", icon: <BarChart3 /> } },
                 { name: "claims", list: "/claims", meta: { label: "NHIA Claims", icon: <ShieldCheck /> } },
