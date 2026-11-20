@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import {
   Activity,
@@ -26,21 +26,27 @@ export function Dashboard() {
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [summaryError, setSummaryError] = useState("");
   const [ordersError, setOrdersError] = useState("");
+  const summaryGeneration = useRef(0);
+  const ordersGeneration = useRef(0);
 
   const loadSummary = async () => {
+    const generation = ++summaryGeneration.current;
     setSummaryError("");
     try {
       const response = await fetch(`${API_URL}/api/reports/summary`, { credentials: "include" });
       if (!response.ok) throw new Error(`Summary request failed (${response.status})`);
       const data = await response.json();
-      setSummary(data);
+      if (generation === summaryGeneration.current) setSummary(data);
     } catch (error) {
-      setSummary(null);
-      setSummaryError(error instanceof Error ? error.message : "Unable to load summary");
+      if (generation === summaryGeneration.current) {
+        setSummary(null);
+        setSummaryError(error instanceof Error ? error.message : "Unable to load summary");
+      }
     }
   };
 
   const loadOrders = async () => {
+    const generation = ++ordersGeneration.current;
     setOrdersError("");
     setOrdersLoaded(false);
     try {
@@ -48,12 +54,16 @@ export function Dashboard() {
       if (!response.ok) throw new Error(`Orders request failed (${response.status})`);
       const data = await response.json();
       if (!Array.isArray(data)) throw new Error("Invalid orders response");
-      setOrders(data.slice(0, 6));
-      setOrdersLoaded(true);
+      if (generation === ordersGeneration.current) {
+        setOrders(data.slice(0, 6));
+        setOrdersLoaded(true);
+      }
     } catch (error) {
-      setOrders([]);
-      setOrdersLoaded(false);
-      setOrdersError(error instanceof Error ? error.message : "Unable to load orders");
+      if (generation === ordersGeneration.current) {
+        setOrders([]);
+        setOrdersLoaded(false);
+        setOrdersError(error instanceof Error ? error.message : "Unable to load orders");
+      }
     }
   };
 

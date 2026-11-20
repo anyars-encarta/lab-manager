@@ -139,6 +139,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       facilities: "/api/facilities",
       users: "/api/users",
     };
+    let reportGeneration: number | null = null;
     try {
       if (section === "orders") {
         const selected = String(values.investigationIds).split(",");
@@ -151,12 +152,18 @@ export function LaboratoryWorkspace({ section }: Props) {
         const response = await fetch(`${API_URL}/api/orders`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to create order");
       } else if (section === "reports") {
+        reportGeneration = ++requestGeneration.current;
+        setLoading(true);
+        setLoadError("");
         const response = await fetch(`${API_URL}/api/reports/summary?from=${values.from}&to=${values.to}`, { credentials: "include" });
         if (!response.ok) throw new Error("Unable to generate report");
-        setRows([await response.json()]);
-        setMessage("Report generated successfully");
-        setDialogOpen(false);
-        setSaving(false);
+        const report = await response.json();
+        if (reportGeneration === requestGeneration.current) {
+          setRows([report]);
+          setLoading(false);
+          setMessage("Report generated successfully");
+          setDialogOpen(false);
+        }
         return;
       } else if (section === "claims") {
         const response = await fetch(`${API_URL}/api/nhia/claims`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ facilityId: values.facilityId, claimPeriodStart: new Date(`${values.from}T00:00:00Z`).toISOString(), claimPeriodEnd: new Date(`${values.to}T23:59:59Z`).toISOString() }) });
@@ -174,7 +181,12 @@ export function LaboratoryWorkspace({ section }: Props) {
       setDialogOpen(false);
       await load();
     } catch (error) {
-      setSubmissionError(error instanceof Error ? error.message : "Unable to save record");
+      if (reportGeneration === null || reportGeneration === requestGeneration.current) {
+        setSubmissionError(error instanceof Error ? error.message : "Unable to save record");
+      }
+      if (reportGeneration !== null && reportGeneration === requestGeneration.current) {
+        setLoading(false);
+      }
     } finally {
       setSaving(false);
     }

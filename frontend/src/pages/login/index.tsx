@@ -34,7 +34,7 @@ export const Login = () => {
               <FlaskConical className="h-6 w-6" />
             </div>
             <div>
-              <p className="text-xl font-bold">LabManager</p>
+              <p className="text-xl font-bold">Encarta Lab Manager</p>
               <p className="text-sm text-muted-foreground">Laboratory Operations</p>
             </div>
           </div>

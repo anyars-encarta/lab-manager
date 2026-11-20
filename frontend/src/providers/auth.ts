@@ -91,9 +91,14 @@ export const authProvider: AuthProvider = {
       return { authenticated: true };
     }
     if (response.status === 401 || response.status === 403) {
+      establishedAuthenticated = false;
+      completedAuthProbe = true;
       return { authenticated: false, redirectTo: "/login" };
     }
-    return { authenticated: true, error: new Error(`Session check failed (${response.status})`) };
+    if (completedAuthProbe && establishedAuthenticated) {
+      return { authenticated: true, error: new Error(`Session check failed (${response.status})`) };
+    }
+    return { authenticated: false, error: new Error(`Unable to check authentication (${response.status})`) };
   },
   getIdentity: async () => {
     const result = await request("/api/me");
