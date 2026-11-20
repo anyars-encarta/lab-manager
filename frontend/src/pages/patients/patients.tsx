@@ -12,11 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 type Facility = { id: string; name: string; code?: string };
-type Investigation = { id: string; code: string; name: string; specimenType?: string; price: string | number; active: boolean; facilityId: string };
+type Investigation = { id: string; code?: string; gdrgCode?: string; name: string; specimenType?: string; price: string | number; active: boolean; facilityId: string };
 type Patient = { id: string; patientNumber: string; firstName: string; lastName: string; phone?: string; nhisNumber?: string; createdAt: string };
 
 export function PatientsPage() {
@@ -27,6 +28,12 @@ export function PatientsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [facilityId, setFacilityId] = useState("");
   const [selectedTests, setSelectedTests] = useState<string[]>([]);
+  const [investigationSearch, setInvestigationSearch] = useState("");
+  const [patientMode, setPatientMode] = useState<"new" | "existing">("new");
+  const [selectedExistingPatientId, setSelectedExistingPatientId] = useState("");
+  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const [requestPatient, setRequestPatient] = useState<Patient | null>(null);
+  const [requestFacilityId, setRequestFacilityId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState<{ patientNumber: string; orderNumber: string; totalAmount: string } | null>(null);
@@ -96,8 +103,8 @@ export function PatientsPage() {
   }, []);
 
   const availableTests = useMemo(
-    () => investigations.filter((test) => test.active && (!facilityId || test.facilityId === facilityId)),
-    [investigations, facilityId],
+    () => investigations.filter((test) => test.active),
+    [investigations],
   );
 
   const charge = useMemo(
@@ -113,8 +120,71 @@ export function PatientsPage() {
       .includes(search.toLowerCase()),
   );
 
+  const filteredInvestigations = availableTests.filter((test) =>
+    `${test.name} ${test.code || ""} ${test.gdrgCode || ""} ${test.specimenType || ""}`
+      .toLowerCase()
+      .includes(investigationSearch.toLowerCase()),
+  );
+
   const toggleTest = (id: string, checked: boolean) => {
     setSelectedTests((current) => checked ? [...current, id] : current.filter((testId) => testId !== id));
+  };
+
+  const openExistingRequest = (patient: Patient) => {
+    setRequestPatient(patient);
+    setRequestFacilityId("");
+    setSelectedTests([]);
+    setInvestigationSearch("");
+    setError("");
+    setRequestDialogOpen(true);
+  };
+
+  const submitExistingRequest = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!requestPatient) return;
+    if (!requestFacilityId) {
+      setError("Select the referring facility.");
+      return;
+    }
+    if (selectedTests.length === 0) {
+      setError("Select at least one laboratory test.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    const clinicianName = String(form.get("clinicianName") || "");
+    try {
+      const response = await fetch(`${API_URL}/api/orders`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          facilityId: requestFacilityId,
+          patientId: requestPatient.id,
+          clinicianName,
+          investigationIds: selectedTests,
+        }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error || "Unable to create laboratory request");
+      toast.success("Laboratory request created", {
+        description: `Request ${body.orderNumber || ""} was created for ${requestPatient.firstName} ${requestPatient.lastName}.`,
+      });
+      setRequestDialogOpen(false);
+      setSelectedTests([]);
+      setSuccess({
+        patientNumber: requestPatient.patientNumber,
+        orderNumber: body.orderNumber || "",
+        totalAmount: body.totalAmount || charge.toFixed(2),
+      });
+    } catch (submissionFailure) {
+      const message = submissionFailure instanceof Error ? submissionFailure.message : "Unable to create laboratory request";
+      setError(message);
+      toast.error("Unable to create laboratory request", { description: message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -127,6 +197,51 @@ export function PatientsPage() {
     }
     if (selectedTests.length === 0) {
       setError("Select at least one laboratory test.");
+      return;
+    }
+    if (patientMode === "existing") {
+      const existingPatient = patients.find((patient) => patient.id === selectedExistingPatientId);
+      if (!existingPatient) {
+        setError("Search for and select an existing patient.");
+        return;
+      }
+      setSaving(true);
+      try {
+        const form = new FormData(event.currentTarget);
+        const clinicianName = String(form.get("clinicianName") || "");
+        const response = await fetch(`${API_URL}/api/orders`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            facilityId,
+            patientId: existingPatient.id,
+            clinicianName,
+            investigationIds: selectedTests,
+          }),
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(body?.error || "Unable to create laboratory request");
+        toast.success("Laboratory request created", {
+          description: `Request ${body.orderNumber || ""} was created for ${existingPatient.firstName} ${existingPatient.lastName}.`,
+        });
+        setSuccess({
+          patientNumber: existingPatient.patientNumber,
+          orderNumber: body.orderNumber || "",
+          totalAmount: body.totalAmount || charge.toFixed(2),
+        });
+        setDialogOpen(false);
+        setSelectedTests([]);
+        setInvestigationSearch("");
+        setSelectedExistingPatientId("");
+        setPatientMode("new");
+      } catch (submissionFailure) {
+        const message = submissionFailure instanceof Error ? submissionFailure.message : "Unable to create laboratory request";
+        setError(message);
+        toast.error("Unable to create laboratory request", { description: message });
+      } finally {
+        setSaving(false);
+      }
       return;
     }
     const form = new FormData(event.currentTarget);
@@ -155,6 +270,9 @@ export function PatientsPage() {
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || "Unable to register patient");
+      toast.success("Patient registered", {
+        description: `${body.patient.patientNumber} was registered and a laboratory request was created.`,
+      });
       setSuccess({
         patientNumber: body.patient.patientNumber,
         orderNumber: body.order.orderNumber,
@@ -165,6 +283,9 @@ export function PatientsPage() {
       setSelectedTests([]);
       await load();
     } catch (submissionFailure) {
+      toast.error("Unable to register patient", {
+        description: submissionFailure instanceof Error ? submissionFailure.message : "An unexpected error occurred.",
+      });
       setError(submissionFailure instanceof Error ? submissionFailure.message : "Unable to register patient");
     } finally {
       setSaving(false);
@@ -182,16 +303,43 @@ export function PatientsPage() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (open) setError(""); }}>
           <DialogTrigger asChild>
-            <Button className="gap-2"><Plus className="h-4 w-4" />Register patient</Button>
+            <Button className="gap-2"><Plus className="h-4 w-4" />New patient / request</Button>
           </DialogTrigger>
           <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
             <form onSubmit={submit}>
               <DialogHeader>
-                <DialogTitle>New patient and test request</DialogTitle>
-                <DialogDescription>Capture patient details, the referring facility and requested investigations.</DialogDescription>
+                <DialogTitle>{patientMode === "existing" ? "Existing patient test request" : "New patient and test request"}</DialogTitle>
+                <DialogDescription>
+                  {patientMode === "existing"
+                    ? "Search for an existing patient, then add investigations to a new request."
+                    : "Capture patient details, the referring facility and requested investigations."}
+                </DialogDescription>
               </DialogHeader>
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
+                <Button type="button" size="sm" variant={patientMode === "existing" ? "default" : "ghost"} onClick={() => { setPatientMode("existing"); setSelectedExistingPatientId(""); setError(""); }}>Existing patient</Button>
+                <Button type="button" size="sm" variant={patientMode === "new" ? "default" : "ghost"} onClick={() => { setPatientMode("new"); setSelectedExistingPatientId(""); setError(""); }}>New patient</Button>
+              </div>
               <div className="grid gap-6 py-5 lg:grid-cols-[1fr_0.9fr]">
                 <div className="space-y-4">
+                  {patientMode === "existing" ? (
+                    <>
+                      <ExistingPatientSearch
+                        patients={patients}
+                        value={selectedExistingPatientId}
+                        onChange={setSelectedExistingPatientId}
+                      />
+                      {selectedExistingPatientId && (() => {
+                        const selected = patients.find((patient) => patient.id === selectedExistingPatientId);
+                        return selected ? (
+                          <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+                            <p className="font-medium">{selected.firstName} {selected.lastName}</p>
+                            <p className="text-xs text-muted-foreground">{selected.patientNumber}{selected.phone ? ` · ${selected.phone}` : ""}{selected.nhisNumber ? ` · NHIS ${selected.nhisNumber}` : ""}</p>
+                          </div>
+                        ) : null;
+                      })()}
+                    </>
+                  ) : (
+                    <>
                   <div className="grid grid-cols-2 gap-3">
                     <Field name="firstName" label="First name" required />
                     <Field name="lastName" label="Last name" required />
@@ -221,12 +369,14 @@ export function PatientsPage() {
                       <FacilitySelect
                         facilities={facilities}
                         value={facilityId}
-                        onChange={(value) => { setFacilityId(value); setSelectedTests([]); }}
+                        onChange={setFacilityId}
                       />
                     </div>
                     <Field name="clinicianName" label="Referring clinician" />
                   </div>
                   <Field name="notes" label="Clinical notes" />
+                    </>
+                  )}
                 </div>
 
                 <Card className="border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20">
@@ -235,12 +385,14 @@ export function PatientsPage() {
                     <CardDescription>Select tests for this patient.</CardDescription>
                   </CardHeader>
                   <CardContent>
+                    <div className="relative mb-3">
+                      <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input className="pl-9" placeholder="Search investigations..." value={investigationSearch} onChange={(event) => setInvestigationSearch(event.target.value)} />
+                    </div>
                     <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                      {!facilityId ? (
-                        <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">Select a referring facility to view its investigations.</p>
-                      ) : availableTests.length === 0 ? (
-                        <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">No active investigations configured for this facility.</p>
-                      ) : availableTests.map((test) => (
+                      {filteredInvestigations.length === 0 ? (
+                        <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">No investigations match your search.</p>
+                      ) : filteredInvestigations.map((test) => (
                         <label key={test.id} className="flex cursor-pointer items-center gap-3 rounded-lg border bg-background p-3 transition-colors hover:bg-muted/60">
                           <Checkbox checked={selectedTests.includes(test.id)} onCheckedChange={(checked) => toggleTest(test.id, checked === true)} />
                           <div className="min-w-0 flex-1">
@@ -261,7 +413,13 @@ export function PatientsPage() {
               {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={saving}>{saving ? "Registering..." : "Register and create request"}</Button>
+                <Button type="submit" disabled={saving}>
+                  {saving
+                    ? "Processing..."
+                    : patientMode === "existing"
+                      ? "Create request for existing patient"
+                      : "Register and create request"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -278,6 +436,63 @@ export function PatientsPage() {
           <Button size="sm" variant="outline" onClick={() => setSuccess(null)}>Dismiss</Button>
         </div>
       )}
+
+      <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+          <form onSubmit={submitExistingRequest}>
+            <DialogHeader>
+              <DialogTitle>Request investigations</DialogTitle>
+              <DialogDescription>
+                {requestPatient ? `Create a laboratory request for ${requestPatient.firstName} ${requestPatient.lastName} (${requestPatient.patientNumber}).` : "Select investigations for this patient."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-5 py-5">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Referring facility</Label>
+                  <FacilitySelect facilities={facilities} value={requestFacilityId} onChange={setRequestFacilityId} />
+                </div>
+                <Field name="clinicianName" label="Referring clinician" />
+              </div>
+              <Card className="border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Investigations</CardTitle>
+                  <CardDescription>Search and select tests for this request.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input className="pl-9" placeholder="Search investigations..." value={investigationSearch} onChange={(event) => setInvestigationSearch(event.target.value)} />
+                  </div>
+                  <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                    {filteredInvestigations.length === 0 ? (
+                      <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">No investigations match your search.</p>
+                    ) : filteredInvestigations.map((test) => (
+                      <label key={test.id} className="flex cursor-pointer items-center gap-3 rounded-lg border bg-background p-3 transition-colors hover:bg-muted/60">
+                        <Checkbox checked={selectedTests.includes(test.id)} onCheckedChange={(checked) => toggleTest(test.id, checked === true)} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">{test.name}</p>
+                          <p className="text-xs text-muted-foreground">{test.gdrgCode || test.code || "Investigation"}{test.specimenType ? ` · ${test.specimenType}` : ""}</p>
+                        </div>
+                        <span className="text-sm font-semibold">GH₵ {Number(test.price).toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex items-center justify-between border-t pt-4">
+                    <span className="text-sm text-muted-foreground">Applicable charge</span>
+                    <span className="text-xl font-semibold text-blue-700 dark:text-blue-400">GH₵ {charge.toFixed(2)}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+            {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRequestDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={saving}>{saving ? "Creating request..." : "Create laboratory request"}</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {loadError && (
         <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
@@ -299,7 +514,16 @@ export function PatientsPage() {
             <div className="py-16 text-center text-sm text-muted-foreground">No patient records found</div>
           ) : (
             <Table>
-              <TableHeader><TableRow><TableHead>Patient</TableHead><TableHead>Patient number</TableHead><TableHead>Phone</TableHead><TableHead>NHIS</TableHead><TableHead>Registered</TableHead></TableRow></TableHeader>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Patient</TableHead>
+                  <TableHead>Patient number</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>NHIS</TableHead>
+                  <TableHead>Registered</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
               <TableBody>
                 {filteredPatients.map((patient) => (
                   <TableRow key={patient.id}>
@@ -308,6 +532,9 @@ export function PatientsPage() {
                     <TableCell>{patient.phone || "—"}</TableCell>
                     <TableCell>{patient.nhisNumber || "—"}</TableCell>
                     <TableCell>{new Date(patient.createdAt).toLocaleDateString()}</TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="outline" onClick={() => openExistingRequest(patient)}>Request tests</Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -340,21 +567,6 @@ function FacilitySelect({
   const [open, setOpen] = useState(false);
   const selected = facilities.find((facility) => facility.id === value);
 
-  if (facilities.length <= 8) {
-    return (
-      <Select value={value} onValueChange={onChange} required>
-        <SelectTrigger><SelectValue placeholder="Select facility" /></SelectTrigger>
-        <SelectContent>
-          {facilities.map((facility) => (
-            <SelectItem key={facility.id} value={facility.id}>
-              {facility.name}{facility.code ? ` — ${facility.code}` : ""}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    );
-  }
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -380,6 +592,62 @@ function FacilitySelect({
                 >
                   <Check className={`mr-2 h-4 w-4 ${facility.id === value ? "opacity-100" : "opacity-0"}`} />
                   {facility.name}{facility.code ? ` — ${facility.code}` : ""}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ExistingPatientSearch({
+  patients,
+  value,
+  onChange,
+}: {
+  patients: Patient[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selected = patients.find((patient) => patient.id === value);
+  const filtered = patients.filter((patient) =>
+    `${patient.firstName} ${patient.lastName} ${patient.patientNumber} ${patient.phone || ""} ${patient.nhisNumber || ""}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between">
+          {selected ? `${selected.firstName} ${selected.lastName} — ${selected.patientNumber}` : "Search existing patient"}
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Search name, patient number, phone or NHIS..." value={search} onValueChange={setSearch} />
+          <CommandList>
+            <CommandEmpty>No patient found.</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((patient) => (
+                <CommandItem
+                  key={patient.id}
+                  value={patient.id}
+                  onSelect={() => {
+                    onChange(patient.id);
+                    setOpen(false);
+                  }}
+                >
+                  <Check className={`mr-2 h-4 w-4 ${patient.id === value ? "opacity-100" : "opacity-0"}`} />
+                  <div>
+                    <p className="font-medium">{patient.firstName} {patient.lastName}</p>
+                    <p className="text-xs text-muted-foreground">{patient.patientNumber}{patient.phone ? ` · ${patient.phone}` : ""}</p>
+                  </div>
                 </CommandItem>
               ))}
             </CommandGroup>

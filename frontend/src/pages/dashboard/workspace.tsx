@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -151,6 +152,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         };
         const response = await fetch(`${API_URL}/api/orders`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to create order");
+        toast.success("Laboratory request created", { description: "The investigation request and charges were saved." });
       } else if (section === "reports") {
         reportGeneration = ++requestGeneration.current;
         setLoading(true);
@@ -162,12 +164,14 @@ export function LaboratoryWorkspace({ section }: Props) {
           setRows([report]);
           setLoading(false);
           setMessage("Report generated successfully");
+          toast.success("Laboratory report generated", { description: "The selected reporting period is ready." });
           setDialogOpen(false);
         }
         return;
       } else if (section === "claims") {
         const response = await fetch(`${API_URL}/api/nhia/claims`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ facilityId: values.facilityId, claimPeriodStart: new Date(`${values.from}T00:00:00Z`).toISOString(), claimPeriodEnd: new Date(`${values.to}T23:59:59Z`).toISOString() }) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to generate claim");
+        toast.success("NHIA claim generated", { description: "The claim was created for the selected period." });
       } else {
         const path = pathMap[section];
         if (!path) return;
@@ -176,11 +180,17 @@ export function LaboratoryWorkspace({ section }: Props) {
         if (section === "investigations") payload = { ...values, price: Number(values.price) };
         const response = await fetch(`${API_URL}${path}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to save record");
+        toast.success(section === "users" ? "User account created" : "Setup record saved", {
+          description: section === "users" ? "The new account and role were saved." : "The setup information was saved successfully.",
+        });
       }
       setMessage("Saved successfully");
       setDialogOpen(false);
       await load();
     } catch (error) {
+      toast.error("Unable to complete operation", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
       if (reportGeneration === null || reportGeneration === requestGeneration.current) {
         setSubmissionError(error instanceof Error ? error.message : "Unable to save record");
       }

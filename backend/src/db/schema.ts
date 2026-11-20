@@ -136,6 +136,7 @@ export const patients = pgTable("patients", {
 export const investigations = pgTable("investigations", {
   id: uuid("id").primaryKey().defaultRandom(),
   code: varchar("code", { length: 50 }).notNull(),
+  gdrgCode: varchar("gdrg_code", { length: 50 }),
   name: varchar("name", { length: 200 }).notNull(),
   category: varchar("category", { length: 100 }),
   specimenType: varchar("specimen_type", { length: 100 }),
@@ -156,10 +157,24 @@ export const parameters = pgTable("parameters", {
   name: varchar("name", { length: 200 }).notNull(),
   unit: varchar("unit", { length: 50 }),
   referenceRange: text("reference_range"),
+  referenceLow: numeric("reference_low", { precision: 12, scale: 4 }),
+  referenceHigh: numeric("reference_high", { precision: 12, scale: 4 }),
   dataType: varchar("data_type", { length: 30 }).notNull().default("text"),
   decimalPlaces: integer("decimal_places").notNull().default(0),
   sortOrder: integer("sort_order").notNull().default(0),
   active: boolean("active").notNull().default(true),
+});
+
+export const parameterReferenceRanges = pgTable("parameter_reference_ranges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  parameterId: uuid("parameter_id").notNull().references(() => parameters.id, { onDelete: "cascade" }),
+  gender: varchar("gender", { length: 30 }).notNull().default("all"),
+  ageMin: integer("age_min").notNull().default(0),
+  ageMax: integer("age_max"),
+  referenceLow: numeric("reference_low", { precision: 12, scale: 4 }),
+  referenceHigh: numeric("reference_high", { precision: 12, scale: 4 }),
+  referenceRange: text("reference_range"),
+  sortOrder: integer("sort_order").notNull().default(0),
 });
 
 export const labOrders = pgTable("lab_orders", {

@@ -23,7 +23,12 @@ app.use("/api", api);
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(error);
   if (error instanceof Error && error.name === "ZodError") {
-    res.status(400).json({ error: "Invalid request data" });
+    const zodError = error as Error & { issues?: Array<{ path: Array<string | number>; message: string }> };
+    const firstIssue = zodError.issues?.[0];
+    const field = firstIssue?.path?.length ? firstIssue.path.join(".") : "Request";
+    res.status(400).json({
+      error: firstIssue ? `${field}: ${firstIssue.message}` : "Invalid request data",
+    });
     return;
   }
   res.status(500).json({ error: "Internal server error" });
