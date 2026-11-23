@@ -28,6 +28,10 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
   };
 
 const numberValue = (value: unknown) => Number(value ?? 0);
+const investigationCharge = (item: typeof investigations.$inferSelect) =>
+  item.covered
+    ? numberValue(item.coveredTariff) + numberValue(item.topUp)
+    : numberValue(item.uncoveredTariff);
 const calendarAge = (birthDate: Date, at: Date = new Date()) => {
   const today = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
   const birth = new Date(Date.UTC(birthDate.getUTCFullYear(), birthDate.getUTCMonth(), birthDate.getUTCDate()));
@@ -128,7 +132,9 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
     gdrgCode: z.string().trim().max(50).optional(),
     name: z.string().min(2),
     specimenType: z.string().trim().optional(),
-    price: z.coerce.number().nonnegative(),
+    coveredTariff: z.coerce.number().nonnegative().optional(),
+    uncoveredTariff: z.coerce.number().nonnegative().optional(),
+    topUp: z.coerce.number().nonnegative().optional(),
     covered: z.boolean().optional(),
   }).parse(req.body);
   const facility = (await db.select().from(facilities).orderBy(asc(facilities.name)).limit(1))[0];
@@ -139,7 +145,12 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
     gdrgCode: body.gdrgCode,
     name: body.name,
     specimenType: body.specimenType,
-    price: body.price.toFixed(2),
+    coveredTariff: (body.coveredTariff ?? 0).toFixed(2),
+    uncoveredTariff: (body.uncoveredTariff ?? 0).toFixed(2),
+    topUp: (body.topUp ?? 0).toFixed(2),
+    price: body.coveredTariff != null
+      ? (body.coveredTariff + (body.topUp ?? 0)).toFixed(2)
+      : "0.00",
     category: "investigation",
     covered: body.covered ?? true,
   }).returning();
@@ -151,14 +162,29 @@ api.patch("/investigations/:id", requireRole("admin"), asyncRoute(async (req, re
     gdrgCode: z.string().trim().max(50).nullable().optional(),
     name: z.string().min(2).optional(),
     specimenType: z.string().optional(),
-    price: z.coerce.number().nonnegative().optional(),
+    coveredTariff: z.coerce.number().nonnegative().optional(),
+    uncoveredTariff: z.coerce.number().nonnegative().optional(),
+    topUp: z.coerce.number().nonnegative().optional(),
     active: z.boolean().optional(),
     covered: z.boolean().optional(),
   }).parse(req.body);
   const id = String(req.params.id);
-  const values = body.price === undefined
-    ? { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active, covered: body.covered }
-    : { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active, covered: body.covered, price: body.price.toFixed(2) };
+  const values = {
+    gdrgCode: body.gdrgCode,
+    name: body.name,
+    specimenType: body.specimenType,
+    active: body.active,
+    covered: body.covered,
+    coveredTariff: body.coveredTariff?.toFixed(2),
+    uncoveredTariff: body.uncoveredTariff?.toFixed(2),
+    topUp: body.topUp?.toFixed(2),
+  };
+  if (body.coveredTariff != null || body.topUp != null) {
+    const existing = await db.query.investigations.findFirst({ where: eq(investigations.id, id) });
+    const coveredTariff = body.coveredTariff ?? numberValue(existing?.coveredTariff);
+    const topUp = body.topUp ?? numberValue(existing?.topUp);
+    Object.assign(values, { price: (coveredTariff + topUp).toFixed(2) });
+  }
   const [updated] = await db.update(investigations).set(values).where(eq(investigations.id, id)).returning();
   if (!updated) return res.status(404).json({ error: "Investigation not found" });
   res.json(updated);
@@ -384,7 +410,7 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
   if (inactive) {
     return res.status(400).json({ error: "One or more investigations are inactive" });
   }
-  const total = selected.reduce((sum, item) => sum + numberValue(item.price), 0);
+  const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
   const result = await db.transaction(async (tx) => {
     const [patient] = await tx.insert(patients).values({
       facilityId: body.facilityId,
@@ -414,8 +440,8 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
       orderId: order.id,
       investigationId: item.id,
       quantity: 1,
-      unitPrice: item.price,
-      lineTotal: item.price,
+      unitPrice: investigationCharge(item).toFixed(2),
+      lineTotal: investigationCharge(item).toFixed(2),
     })));
 
     return { patient, order };
@@ -445,7 +471,7 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, body.patientId) });
   if (!patient) return res.status(404).json({ error: "Patient not found" });
 
-  const total = selected.reduce((sum, item) => sum + numberValue(item.price), 0);
+  const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
   const [order] = await db.insert(labOrders).values({
     orderNumber: prefixNumber("LAB"),
     patientId: body.patientId,
@@ -459,8 +485,8 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
     orderId: order.id,
     investigationId: item.id,
     quantity: 1,
-    unitPrice: item.price,
-    lineTotal: item.price,
+    unitPrice: investigationCharge(item).toFixed(2),
+    lineTotal: investigationCharge(item).toFixed(2),
   })));
   res.status(201).json(await db.query.labOrders.findFirst({ where: eq(labOrders.id, order.id) }));
 }));

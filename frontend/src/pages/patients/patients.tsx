@@ -17,7 +17,20 @@ import { toast } from "sonner";
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 type Facility = { id: string; name: string; code?: string };
-type Investigation = { id: string; code?: string; gdrgCode?: string; name: string; specimenType?: string; price: string | number; active: boolean; facilityId: string };
+type Investigation = {
+  id: string;
+  code?: string;
+  gdrgCode?: string;
+  name: string;
+  specimenType?: string;
+  price: string | number;
+  coveredTariff: string | number;
+  uncoveredTariff: string | number;
+  topUp: string | number;
+  covered: boolean;
+  active: boolean;
+  facilityId: string;
+};
 type Patient = { id: string; patientNumber: string; firstName: string; lastName: string; phone?: string; nhisNumber?: string; createdAt: string };
 
 export function PatientsPage() {
@@ -116,7 +129,11 @@ export function PatientsPage() {
   const charge = useMemo(
     () => availableTests
       .filter((test) => selectedTests.includes(test.id))
-      .reduce((total, test) => total + Number(test.price || 0), 0),
+      .reduce((total, test) => total + (
+        test.covered
+          ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
+          : Number(test.uncoveredTariff || 0)
+      ), 0),
     [availableTests, selectedTests],
   );
 
@@ -416,7 +433,11 @@ export function PatientsPage() {
                             <p className="text-sm font-medium">{test.name}</p>
                             <p className="text-xs text-muted-foreground">{test.code}{test.specimenType ? ` · ${test.specimenType}` : ""}</p>
                           </div>
-                          <span className="text-sm font-semibold">GH₵ {Number(test.price).toFixed(2)}</span>
+                          <span className="text-sm font-semibold">
+                            GH₵ {(test.covered
+                              ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
+                              : Number(test.uncoveredTariff || 0)).toFixed(2)}
+                          </span>
                         </label>
                       ))}
                     </div>
@@ -491,7 +512,11 @@ export function PatientsPage() {
                           <p className="text-sm font-medium">{test.name}</p>
                           <p className="text-xs text-muted-foreground">{test.gdrgCode || test.code || "Investigation"}{test.specimenType ? ` · ${test.specimenType}` : ""}</p>
                         </div>
-                        <span className="text-sm font-semibold">GH₵ {Number(test.price).toFixed(2)}</span>
+                        <span className="text-sm font-semibold">
+                          GH₵ {(test.covered
+                            ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
+                            : Number(test.uncoveredTariff || 0)).toFixed(2)}
+                        </span>
                       </label>
                     ))}
                   </div>

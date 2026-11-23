@@ -36,6 +36,13 @@
       "when": 1795431471732,
       "tag": "0004_futuristic_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795455213316,
+      "tag": "0005_friendly_ultimates",
+      "breakpoints": true
     }
   ]
 }

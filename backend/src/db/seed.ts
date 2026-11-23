@@ -285,6 +285,9 @@ async function seed() {
       category: "investigation",
       specimenType: specimenFor(name),
       price: "0.00",
+      coveredTariff: "0.00",
+      uncoveredTariff: "0.00",
+      topUp: "0.00",
       covered: true,
       active: true,
     });

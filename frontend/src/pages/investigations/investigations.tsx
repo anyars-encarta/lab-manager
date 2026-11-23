@@ -23,6 +23,9 @@ type Investigation = {
   name: string;
   specimenType?: string;
   price: string | number;
+  coveredTariff: string | number;
+  uncoveredTariff: string | number;
+  topUp: string | number;
   active: boolean;
   covered: boolean;
 };
@@ -71,6 +74,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const [editingParameter, setEditingParameter] = useState<Parameter | null>(null);
   const [parameterActive, setParameterActive] = useState(true);
   const [covered, setCovered] = useState(true);
+  const [coveredTariff, setCoveredTariff] = useState("0");
+  const [uncoveredTariff, setUncoveredTariff] = useState("0");
+  const [topUp, setTopUp] = useState("0");
   const [selectedTestId, setSelectedTestId] = useState("");
   const [saving, setSaving] = useState(false);
   const [submissionError, setSubmissionError] = useState("");
@@ -125,6 +131,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const openTestDialog = (test?: Investigation) => {
     setEditingTest(test || null);
     setCovered(test?.covered ?? true);
+    setCoveredTariff(test ? String(test.coveredTariff ?? "0") : "0");
+    setUncoveredTariff(test ? String(test.uncoveredTariff ?? "0") : "0");
+    setTopUp(test ? String(test.topUp ?? "0") : "0");
     setSubmissionError("");
     setTestDialogOpen(true);
   };
@@ -172,9 +181,11 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     setSubmissionError("");
     const form = new FormData(event.currentTarget);
     const values = Object.fromEntries(form.entries());
-    const price = Number(values.price);
-    if (!Number.isFinite(price) || price < 0) {
-      setSubmissionError("Enter a valid investigation price.");
+    const coveredTariffValue = Number(coveredTariff);
+    const uncoveredTariffValue = Number(uncoveredTariff);
+    const topUpValue = Number(topUp);
+    if ([coveredTariffValue, uncoveredTariffValue, topUpValue].some((value) => !Number.isFinite(value) || value < 0)) {
+      setSubmissionError("Enter valid covered, uncovered, and top-up tariff amounts.");
       setSaving(false);
       return;
     }
@@ -184,7 +195,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
         : String(values.gdrgCode || "").trim() || undefined,
       name: String(values.name || "").trim(),
       specimenType: editingTest ? String(values.specimenType || "") : String(values.specimenType || "").trim() || undefined,
-      price,
+      coveredTariff: coveredTariffValue,
+      uncoveredTariff: uncoveredTariffValue,
+      topUp: topUpValue,
       covered,
     };
     try {
@@ -319,13 +332,15 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
             <CardContent className="p-0">
               {loading ? <div className="py-16 text-center text-sm text-muted-foreground">Loading investigations...</div> : filtered.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">No investigations found</div> : (
                 <Table>
-                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Price</TableHead><TableHead>Covered</TableHead><TableHead>Status</TableHead>{canWrite && <TableHead className="text-right">Action</TableHead>}</TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Covered tariff</TableHead><TableHead>Top-up</TableHead><TableHead>Uncovered tariff</TableHead><TableHead>Covered</TableHead><TableHead>Status</TableHead>{canWrite && <TableHead className="text-right">Action</TableHead>}</TableRow></TableHeader>
                   <TableBody>{filtered.map((test) => (
                     <TableRow key={test.id}>
                       <TableCell>{test.gdrgCode ? <Badge variant="outline">{test.gdrgCode}</Badge> : "—"}</TableCell>
                       <TableCell>{test.name}</TableCell>
                       <TableCell>{test.specimenType || "—"}</TableCell>
-                      <TableCell>GH₵ {Number(test.price).toFixed(2)}</TableCell>
+                      <TableCell>GH₵ {Number(test.coveredTariff ?? 0).toFixed(2)}</TableCell>
+                      <TableCell>GH₵ {Number(test.topUp ?? 0).toFixed(2)}</TableCell>
+                      <TableCell>GH₵ {Number(test.uncoveredTariff ?? 0).toFixed(2)}</TableCell>
                       <TableCell><Badge variant={test.covered ? "default" : "secondary"}>{test.covered ? "Covered" : "Not covered"}</Badge></TableCell>
                       <TableCell><Badge variant={test.active ? "default" : "secondary"}>{test.active ? "Active" : "Inactive"}</Badge></TableCell>
                       {canWrite && <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>}
@@ -383,7 +398,11 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                 <Field name="specimenType" label="Specimen type" defaultValue={editingTest?.specimenType} />
               </div>
               <Field name="name" label="Investigation name" required defaultValue={editingTest?.name} />
-              <Field name="price" label="Price (GH₵)" type="number" step="0.01" required defaultValue={editingTest?.price} />
+              <div className="grid grid-cols-3 gap-3">
+                <Field name="coveredTariff" label="Covered tariff (GH₵)" type="number" step="0.01" defaultValue={coveredTariff} />
+                <Field name="topUp" label="Top-up (GH₵)" type="number" step="0.01" defaultValue={topUp} />
+                <Field name="uncoveredTariff" label="Uncovered tariff (GH₵)" type="number" step="0.01" defaultValue={uncoveredTariff} />
+              </div>
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <Label htmlFor="investigation-covered">Covered investigation</Label>

@@ -177,7 +177,12 @@ export function LaboratoryWorkspace({ section }: Props) {
         if (!path) return;
         let payload: Record<string, unknown> = values;
         if (section === "users") payload = { name: values.name, email: values.email, password: values.password, role: values.role };
-        if (section === "investigations") payload = { ...values, price: Number(values.price) };
+        if (section === "investigations") payload = {
+          ...values,
+          coveredTariff: Number(values.coveredTariff || 0),
+          uncoveredTariff: Number(values.uncoveredTariff || 0),
+          topUp: Number(values.topUp || 0),
+        };
         const response = await fetch(`${API_URL}${path}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to save record");
         toast.success(section === "users" ? "User account created" : "Setup record saved", {
@@ -235,7 +240,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                     <RoleField />
                   </>}
                   {section === "facilities" && <><Field name="name" label="Facility name" required /><Field name="code" label="Facility code" /><Field name="address" label="Address" /><Field name="phone" label="Phone" /><Field name="nhiaFacilityCode" label="NHIA facility code" /></>}
-                  {section === "investigations" && <><FacilityField facilities={facilities} /><Field name="code" label="Test code" required /><Field name="name" label="Investigation name" required /><Field name="category" label="Category" /><Field name="specimenType" label="Specimen type" /><Field name="price" label="Price (GH₵)" type="number" step="0.01" required /><Field name="nhiaCode" label="NHIA code" /></>}
+                  {section === "investigations" && <><Field name="gdrgCode" label="G-DRG code" /><Field name="name" label="Investigation name" required /><Field name="specimenType" label="Specimen type" /><div className="grid grid-cols-3 gap-3"><Field name="coveredTariff" label="Covered tariff" type="number" step="0.01" /><Field name="topUp" label="Top-up" type="number" step="0.01" /><Field name="uncoveredTariff" label="Uncovered tariff" type="number" step="0.01" /></div></>}
                   {section === "orders" && <><FacilityField facilities={facilities} /><PatientField patients={patients} /><Field name="clinicianName" label="Clinician" /><InvestigationField investigations={investigations} /></>}
                   {(section === "claims" || section === "reports") && <><FacilityField facilities={facilities} /><div className="grid grid-cols-2 gap-3"><Field name="from" label="From" type="date" required /><Field name="to" label="To" type="date" required /></div></>}
                 </div>
@@ -292,7 +297,7 @@ function RecordTable({ section, rows }: { section: Props["section"]; rows: any[]
   const columns: Record<Props["section"], string[]> = {
     patients: ["patientNumber", "name", "phone", "nhisNumber", "createdAt"],
     orders: ["orderNumber", "status", "paymentStatus", "totalAmount", "createdAt"],
-    investigations: ["code", "name", "category", "specimenType", "price", "active"],
+    investigations: ["gdrgCode", "name", "specimenType", "coveredTariff", "topUp", "uncoveredTariff", "covered", "active"],
     facilities: ["name", "code", "phone", "nhiaFacilityCode"],
     users: ["name", "email", "role", "active"],
     claims: ["claimNumber", "status", "totalAmount", "claimPeriodStart", "claimPeriodEnd"],
