@@ -83,6 +83,11 @@ api.patch("/users/:id", requireRole("admin"), asyncRoute(async (req, res) => {
 
 api.get("/facilities", asyncRoute(async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const hasPagination = req.query.page !== undefined || req.query.pageSize !== undefined || req.query.search !== undefined;
+  if (!hasPagination) {
+    res.json(await db.select().from(facilities).orderBy(asc(facilities.name)));
+    return;
+  }
   const page = Math.max(1, Number(req.query.page || 1) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
   const offset = (page - 1) * pageSize;
@@ -98,11 +103,7 @@ api.get("/facilities", asyncRoute(async (req, res) => {
     db.select().from(facilities).where(where).orderBy(asc(facilities.name)).limit(pageSize).offset(offset),
     db.select({ count: sql<number>`count(*)::int` }).from(facilities).where(where),
   ]);
-  if (req.query.page || req.query.pageSize || req.query.search) {
-    res.json({ data: rows, page, pageSize, total: Number(countRows[0]?.count || 0) });
-  } else {
-    res.json(rows);
-  }
+  res.json({ data: rows, page, pageSize, total: Number(countRows[0]?.count || 0) });
 }));
 
 api.post("/facilities", requireRole("admin"), asyncRoute(async (req, res) => {

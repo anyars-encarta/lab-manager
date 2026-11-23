@@ -37,6 +37,7 @@ const emptyFacility = {
 export function ReferringFacilitiesPage() {
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
@@ -51,22 +52,28 @@ export function ReferringFacilitiesPage() {
   const editorSession = useRef(0);
   const requestGeneration = useRef(0);
 
-  const load = async () => {
+  const load = async (loadPage = page, loadSearch = debouncedSearch) => {
     const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError("");
     try {
       const params = new URLSearchParams({
-        page: String(page),
+        page: String(loadPage),
         pageSize: String(pageSize),
       });
-      if (search.trim()) params.set("search", search.trim());
+      if (loadSearch.trim()) params.set("search", loadSearch.trim());
       const response = await fetch(`${API_URL}/api/facilities?${params}`, { credentials: "include" });
       if (!response.ok) throw new Error(`Unable to load referring facilities (${response.status})`);
       const data = await response.json();
       if (generation !== requestGeneration.current) return;
       setFacilities(Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : []);
-      setTotal(Number(data.total || (Array.isArray(data) ? data.length : 0)));
+      const nextTotal = Number(data.total || (Array.isArray(data) ? data.length : 0));
+      setTotal(nextTotal);
+      const lastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+      if (loadPage > lastPage) {
+        setPage(lastPage);
+        await load(lastPage, loadSearch);
+      }
     } catch (error) {
       if (generation === requestGeneration.current) {
         setFacilities([]);
@@ -78,17 +85,16 @@ export function ReferringFacilitiesPage() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setPage(1), 300);
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
   useEffect(() => {
-    void load();
-  }, [page, pageSize]);
+    void load(page, debouncedSearch);
+  }, [page, pageSize, debouncedSearch]);
 
   const openCreate = () => {
     if (saving) return;
@@ -150,7 +156,7 @@ export function ReferringFacilitiesPage() {
         description: `${form.name} was saved successfully.`,
       });
       if (session === editorSession.current) setDialogOpen(false);
-      await load();
+      await load(page, debouncedSearch);
     } catch (error) {
       toast.error("Unable to save referring facility", {
         description: error instanceof Error ? error.message : "An unexpected error occurred.",

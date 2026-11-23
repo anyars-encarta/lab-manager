@@ -68,6 +68,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     referenceHigh: "",
   });
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
@@ -91,16 +92,16 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const profileSessionGeneration = useRef(0);
   const savedParameterIdRef = useRef<string | null>(null);
 
-  const load = async () => {
+  const load = async (loadPage = page, loadPageSize = pageSize, loadSearch = debouncedSearch) => {
     const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError("");
     try {
       const params = new URLSearchParams({
-        page: String(page),
-        pageSize: String(pageSize),
+        page: String(loadPage),
+        pageSize: String(loadPageSize),
       });
-      if (search.trim()) params.set("search", search.trim());
+      if (loadSearch.trim()) params.set("search", loadSearch.trim());
       const investigationResponse = await fetch(`${API_URL}/api/investigations?${params}`, { credentials: "include" });
       if (!investigationResponse.ok) throw new Error("Unable to load investigation setup");
       const investigationData = await investigationResponse.json();
@@ -142,8 +143,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     }
   };
 
-  useEffect(() => { void load(); }, []);
-
   useEffect(() => {
     void fetch(`${API_URL}/api/investigations?page=1&pageSize=1000`, { credentials: "include" })
       .then(async (response) => {
@@ -155,13 +154,16 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   }, []);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setPage(1), 300);
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
   useEffect(() => {
-    void load();
-  }, [page, pageSize]);
+    void load(page, pageSize, debouncedSearch);
+  }, [page, pageSize, debouncedSearch]);
 
   useEffect(() => {
     ++parameterLoadGeneration.current;

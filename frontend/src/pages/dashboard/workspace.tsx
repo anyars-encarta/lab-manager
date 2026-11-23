@@ -102,7 +102,13 @@ export function LaboratoryWorkspace({ section }: Props) {
             patientResponse.json(),
           ]);
           if (generation === requestGeneration.current) {
-            setInvestigations(Array.isArray(investigationsData) ? investigationsData : []);
+            setInvestigations(
+              Array.isArray(investigationsData.data)
+                ? investigationsData.data
+                : Array.isArray(investigationsData)
+                  ? investigationsData
+                  : [],
+            );
             setPatients(Array.isArray(patientsData) ? patientsData : []);
           }
         } catch (error) {

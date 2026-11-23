@@ -87,11 +87,18 @@ type Patient = {
   createdAt: string;
 };
 
+function getInvestigationCharge(test: Investigation) {
+  return test.covered
+    ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
+    : Number(test.uncoveredTariff || 0);
+}
+
 export function PatientsPage() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
@@ -111,22 +118,23 @@ export function PatientsPage() {
     patientNumber: string;
     orderNumber: string;
     totalAmount: string;
+    operation: "registered" | "requested";
   } | null>(null);
   const requestGeneration = useRef(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const requestDialogGeneration = useRef(0);
 
-  const load = async () => {
+  const load = async (loadPage = page, loadPageSize = pageSize, loadSearch = debouncedSearch) => {
     const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError("");
     try {
       const patientParams = new URLSearchParams({
-        page: String(page),
-        pageSize: String(pageSize),
+        page: String(loadPage),
+        pageSize: String(loadPageSize),
       });
-      if (search.trim()) patientParams.set("search", search.trim());
+      if (loadSearch.trim()) patientParams.set("search", loadSearch.trim());
       const patientResponse = await fetch(
         `${API_URL}/api/patients?${patientParams}`,
         { credentials: "include" },
@@ -166,7 +174,20 @@ export function PatientsPage() {
     const lookupGeneration = generation;
     const lookupResults = await Promise.allSettled([
       fetch(`${API_URL}/api/facilities`, { credentials: "include" }),
-      fetch(`${API_URL}/api/investigations?page=1&pageSize=1000`, { credentials: "include" }),
+      (async () => {
+        const investigations: Investigation[] = [];
+        let lookupPage = 1;
+        while (true) {
+          const response = await fetch(`${API_URL}/api/investigations?page=${lookupPage}&pageSize=100`, { credentials: "include" });
+          if (!response.ok) throw new Error("Unable to load investigations");
+          const payload = await response.json();
+          const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
+          investigations.push(...rows);
+          if (rows.length === 0 || investigations.length >= Number(payload.total || investigations.length)) break;
+          lookupPage += 1;
+        }
+        return new Response(JSON.stringify(investigations), { status: 200 });
+      })(),
     ]);
     if (lookupGeneration !== requestGeneration.current) return;
 
@@ -222,17 +243,16 @@ export function PatientsPage() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setPage(1), 250);
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 250);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
   useEffect(() => {
-    void load();
-  }, [page, pageSize]);
+    void load(page, pageSize, debouncedSearch);
+  }, [page, pageSize, debouncedSearch]);
 
   const availableTests = useMemo(
     () => investigations.filter((test) => test.active),
@@ -244,11 +264,7 @@ export function PatientsPage() {
       availableTests
         .filter((test) => selectedTests.includes(test.id))
         .reduce(
-          (total, test) =>
-            total +
-            (test.covered
-              ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
-              : Number(test.uncoveredTariff || 0)),
+          (total, test) => total + getInvestigationCharge(test),
           0,
         ),
     [availableTests, selectedTests],
@@ -297,7 +313,7 @@ export function PatientsPage() {
     setSaving(true);
     setError("");
     const form = new FormData(event.currentTarget);
-    const clinicianName = String(form.get("clinicianName") || "");
+    const clinicianName = String(form.get("clinicianName") || "").trim();
     try {
       const response = await fetch(`${API_URL}/api/orders`, {
         method: "POST",
@@ -306,7 +322,7 @@ export function PatientsPage() {
         body: JSON.stringify({
           facilityId: requestFacilityId,
           patientId: requestPatient.id,
-          clinicianName,
+          ...(clinicianName ? { clinicianName } : {}),
           investigationIds: selectedTests,
         }),
       });
@@ -326,19 +342,27 @@ export function PatientsPage() {
         patientNumber: requestPatient.patientNumber,
         orderNumber: body.orderNumber || "",
         totalAmount: body.totalAmount || charge.toFixed(2),
+        operation: "requested",
       });
     } catch (submissionFailure) {
       const message =
         submissionFailure instanceof Error
           ? submissionFailure.message
           : "Unable to create laboratory request";
-      setError(message);
+      if (generation === requestDialogGeneration.current) setError(message);
       toast.error("Unable to create laboratory request", {
         description: message,
       });
     } finally {
       setSaving(false);
     }
+  };
+
+  const closeRegistrationDialog = () => {
+    setDialogOpen(false);
+    setSelectedTests([]);
+    setInvestigationSearch("");
+    setError("");
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -364,7 +388,7 @@ export function PatientsPage() {
       setSaving(true);
       try {
         const form = new FormData(event.currentTarget);
-        const clinicianName = String(form.get("clinicianName") || "");
+        const clinicianName = String(form.get("clinicianName") || "").trim();
         const response = await fetch(`${API_URL}/api/orders`, {
           method: "POST",
           credentials: "include",
@@ -372,7 +396,7 @@ export function PatientsPage() {
           body: JSON.stringify({
             facilityId,
             patientId: existingPatient.id,
-            clinicianName,
+            ...(clinicianName ? { clinicianName } : {}),
             investigationIds: selectedTests,
           }),
         });
@@ -388,6 +412,7 @@ export function PatientsPage() {
           patientNumber: existingPatient.patientNumber,
           orderNumber: body.orderNumber || "",
           totalAmount: body.totalAmount || charge.toFixed(2),
+          operation: "requested",
         });
         setDialogOpen(false);
         setSelectedTests([]);
@@ -442,11 +467,12 @@ export function PatientsPage() {
         patientNumber: body.patient.patientNumber,
         orderNumber: body.order.orderNumber,
         totalAmount: body.totalAmount,
+        operation: "registered",
       });
       setDialogOpen(false);
       setFacilityId("");
       setSelectedTests([]);
-      await load();
+      await load(page, pageSize, debouncedSearch);
     } catch (submissionFailure) {
       toast.error("Unable to register patient", {
         description:
@@ -481,14 +507,8 @@ export function PatientsPage() {
         <Dialog
           open={dialogOpen}
           onOpenChange={(open) => {
-            setDialogOpen(open);
-            if (open) {
-              setError("");
-            } else {
-              setSelectedTests([]);
-              setInvestigationSearch("");
-              setError("");
-            }
+            if (open) setError("");
+            else closeRegistrationDialog();
           }}
         >
           <DialogTrigger asChild>
@@ -682,11 +702,7 @@ export function PatientsPage() {
                             </div>
                             <span className="text-sm font-semibold">
                               GH₵{" "}
-                              {(test.covered
-                                ? Number(test.coveredTariff || 0) +
-                                  Number(test.topUp || 0)
-                                : Number(test.uncoveredTariff || 0)
-                              ).toFixed(2)}
+                              {getInvestigationCharge(test).toFixed(2)}
                             </span>
                           </label>
                         ))
@@ -712,7 +728,7 @@ export function PatientsPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setDialogOpen(false)}
+                  onClick={closeRegistrationDialog}
                 >
                   Cancel
                 </Button>
@@ -733,7 +749,11 @@ export function PatientsPage() {
         <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm dark:border-emerald-900 dark:bg-emerald-950/30">
           <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" />
           <div className="flex-1">
-            <p className="font-medium">Patient registered successfully</p>
+            <p className="font-medium">
+              {success.operation === "registered"
+                ? "Patient registered successfully"
+                : "Laboratory request created successfully"}
+            </p>
             <p className="text-muted-foreground">
               {success.patientNumber} · Request {success.orderNumber} · Charge
               GH₵ {Number(success.totalAmount).toFixed(2)}
@@ -829,11 +849,7 @@ export function PatientsPage() {
                           </div>
                           <span className="text-sm font-semibold">
                             GH₵{" "}
-                            {(test.covered
-                              ? Number(test.coveredTariff || 0) +
-                                Number(test.topUp || 0)
-                              : Number(test.uncoveredTariff || 0)
-                            ).toFixed(2)}
+                            {getInvestigationCharge(test).toFixed(2)}
                           </span>
                         </label>
                       ))
