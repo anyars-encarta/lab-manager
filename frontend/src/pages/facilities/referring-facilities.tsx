@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTablePagination } from "@/components/refine-ui/data-table/data-table-pagination";
 import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -36,6 +37,9 @@ const emptyFacility = {
 export function ReferringFacilitiesPage() {
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -52,11 +56,17 @@ export function ReferringFacilitiesPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const response = await fetch(`${API_URL}/api/facilities`, { credentials: "include" });
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (search.trim()) params.set("search", search.trim());
+      const response = await fetch(`${API_URL}/api/facilities?${params}`, { credentials: "include" });
       if (!response.ok) throw new Error(`Unable to load referring facilities (${response.status})`);
       const data = await response.json();
       if (generation !== requestGeneration.current) return;
-      setFacilities(Array.isArray(data) ? data : []);
+      setFacilities(Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : []);
+      setTotal(Number(data.total || (Array.isArray(data) ? data.length : 0)));
     } catch (error) {
       if (generation === requestGeneration.current) {
         setFacilities([]);
@@ -70,6 +80,15 @@ export function ReferringFacilitiesPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setPage(1), 300);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
+    void load();
+  }, [page, pageSize]);
 
   const openCreate = () => {
     if (saving) return;
@@ -144,11 +163,7 @@ export function ReferringFacilitiesPage() {
     }
   };
 
-  const filtered = facilities.filter((facility) =>
-    `${facility.name} ${facility.code || ""} ${facility.phone || ""} ${facility.nhiaFacilityCode || ""}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
+  const filtered = facilities;
 
   return (
     <div className="space-y-5 pb-8">
@@ -213,7 +228,7 @@ export function ReferringFacilitiesPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle className="text-base">Facility records</CardTitle>
-              <CardDescription>{filtered.length} facility/facilities</CardDescription>
+              <CardDescription>{total} facility/facilities</CardDescription>
             </div>
             <div className="relative w-full max-w-xs">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -260,6 +275,19 @@ export function ReferringFacilitiesPage() {
             </Table>
           )}
         </CardContent>
+        <div className="border-t px-4 py-3">
+          <DataTablePagination
+            currentPage={page}
+            pageCount={Math.max(1, Math.ceil(total / pageSize))}
+            setCurrentPage={setPage}
+            pageSize={pageSize}
+            setPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            total={total}
+          />
+        </div>
       </Card>
     </div>
   );

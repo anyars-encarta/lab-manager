@@ -81,8 +81,28 @@ api.patch("/users/:id", requireRole("admin"), asyncRoute(async (req, res) => {
   res.json(updated);
 }));
 
-api.get("/facilities", asyncRoute(async (_req, res) => {
-  res.json(await db.select().from(facilities).orderBy(asc(facilities.name)));
+api.get("/facilities", asyncRoute(async (req, res) => {
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
+  const where = search
+    ? or(
+        ilike(facilities.name, `%${search}%`),
+        ilike(facilities.code, `%${search}%`),
+        ilike(facilities.phone, `%${search}%`),
+        ilike(facilities.nhiaFacilityCode, `%${search}%`),
+      )
+    : undefined;
+  const [rows, countRows] = await Promise.all([
+    db.select().from(facilities).where(where).orderBy(asc(facilities.name)).limit(pageSize).offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(facilities).where(where),
+  ]);
+  if (req.query.page || req.query.pageSize || req.query.search) {
+    res.json({ data: rows, page, pageSize, total: Number(countRows[0]?.count || 0) });
+  } else {
+    res.json(rows);
+  }
 }));
 
 api.post("/facilities", requireRole("admin"), asyncRoute(async (req, res) => {
@@ -397,17 +417,28 @@ api.delete("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(a
 
 api.get("/patients", asyncRoute(async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
-  const rows = search
-    ? await db.select().from(patients).where(or(
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
+  const where = search
+    ? or(
         ilike(sql<string>`concat(${patients.firstName}, ' ', ${patients.lastName})`, `%${search}%`),
         ilike(patients.firstName, `%${search}%`),
         ilike(patients.lastName, `%${search}%`),
         ilike(patients.patientNumber, `%${search}%`),
         ilike(patients.nhisNumber, `%${search}%`),
         ilike(patients.phone, `%${search}%`),
-      )).orderBy(desc(patients.createdAt)).limit(100)
-    : await db.select().from(patients).orderBy(desc(patients.createdAt)).limit(100);
-  res.json(rows);
+      )
+    : undefined;
+  const [rows, countRows] = await Promise.all([
+    db.select().from(patients).where(where).orderBy(desc(patients.createdAt)).limit(pageSize).offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(patients).where(where),
+  ]);
+  if (req.query.page || req.query.pageSize || req.query.search) {
+    res.json({ data: rows, page, pageSize, total: Number(countRows[0]?.count || 0) });
+  } else {
+    res.json(rows);
+  }
 }));
 
 api.post("/patients", requireRole("admin", "frontdesk"), asyncRoute(async (req, res) => {
