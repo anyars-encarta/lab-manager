@@ -289,7 +289,12 @@ function PatientField({ patients }: { patients: any[] }) {
 }
 
 function InvestigationField({ investigations }: { investigations: any[] }) {
-  return <div className="space-y-2"><Label htmlFor="investigationIds">Investigations</Label><Select name="investigationIds" required><SelectTrigger id="investigationIds"><SelectValue placeholder="Select investigation" /></SelectTrigger><SelectContent>{investigations.map((item) => <SelectItem key={item.id} value={item.id}>{item.name} — GH₵ {item.price}</SelectItem>)}</SelectContent></Select></div>;
+  return <div className="space-y-2"><Label htmlFor="investigationIds">Investigations</Label><Select name="investigationIds" required><SelectTrigger id="investigationIds"><SelectValue placeholder="Select investigation" /></SelectTrigger><SelectContent>{investigations.map((item) => {
+    const charge = item.covered
+      ? Number(item.coveredTariff || 0) + Number(item.topUp || 0)
+      : Number(item.uncoveredTariff || 0);
+    return <SelectItem key={item.id} value={item.id}>{item.name} — GH₵ {charge.toFixed(2)}</SelectItem>;
+  })}</SelectContent></Select></div>;
 }
 
 function RecordTable({ section, rows }: { section: Props["section"]; rows: any[] }) {

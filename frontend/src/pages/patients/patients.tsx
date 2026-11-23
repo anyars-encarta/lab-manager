@@ -137,11 +137,7 @@ export function PatientsPage() {
     [availableTests, selectedTests],
   );
 
-  const filteredPatients = patients.filter((patient) =>
-    `${patient.firstName} ${patient.lastName} ${patient.patientNumber} ${patient.nhisNumber || ""}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
+  const filteredPatients = patients;
 
   const filteredInvestigations = availableTests.filter((test) =>
     `${test.name} ${test.code || ""} ${test.gdrgCode || ""} ${test.specimenType || ""}`
@@ -396,17 +392,6 @@ export function PatientsPage() {
                       <Label>NHIS status</Label>
                       <Select name="nhisStatus"><SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="not_eligible">Not eligible</SelectItem></SelectContent></Select>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="space-y-2">
-                      <Label>Referring facility</Label>
-                      <FacilitySelect
-                        facilities={facilities}
-                        value={facilityId}
-                        onChange={setFacilityId}
-                      />
-                    </div>
-                    <Field name="clinicianName" label="Referring clinician" />
                   </div>
                   <Field name="notes" label="Clinical notes" />
                     </>

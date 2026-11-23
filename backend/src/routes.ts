@@ -201,8 +201,8 @@ api.post("/investigations/:id/parameters", requireRole("admin"), asyncRoute(asyn
     name: z.string().min(1),
     unit: z.string().nullable().optional(),
     referenceRange: z.string().nullable().optional(),
-    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
-    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceLow: z.union([z.null(), z.coerce.number()]).optional(),
+    referenceHigh: z.union([z.null(), z.coerce.number()]).optional(),
     dataType: z.enum(["text", "number", "boolean"]).default("text"),
     decimalPlaces: z.number().int().nonnegative().default(0),
     sortOrder: z.number().int().nonnegative().default(0),
@@ -227,8 +227,8 @@ api.patch("/parameters/:id", requireRole("admin"), asyncRoute(async (req, res) =
     name: z.string().min(1).optional(),
     unit: z.string().nullable().optional(),
     referenceRange: z.string().nullable().optional(),
-    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
-    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceLow: z.union([z.null(), z.coerce.number()]).optional(),
+    referenceHigh: z.union([z.null(), z.coerce.number()]).optional(),
     dataType: z.enum(["text", "number", "boolean"]).optional(),
     decimalPlaces: z.number().int().nonnegative().optional(),
     sortOrder: z.number().int().nonnegative().optional(),
@@ -262,8 +262,8 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
     gender: z.enum(["all", "male", "female", "other"]).default("all"),
     ageMin: z.coerce.number().int().nonnegative().default(0),
     ageMax: z.coerce.number().int().nonnegative().nullable().optional(),
-    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
-    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceLow: z.union([z.null(), z.coerce.number()]).optional(),
+    referenceHigh: z.union([z.null(), z.coerce.number()]).optional(),
     referenceRange: z.string().nullable().optional(),
     sortOrder: z.coerce.number().int().nonnegative().default(0),
   }).parse(req.body);
@@ -275,16 +275,35 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
       body.referenceLow > body.referenceHigh) {
     return res.status(400).json({ error: "Reference low value cannot exceed reference high value" });
   }
-  const [created] = await db.insert(parameterReferenceRanges).values({
-    parameterId: String(req.params.id),
-    gender: body.gender,
-    ageMin: body.ageMin,
-    ageMax: body.ageMax,
-    referenceLow: body.referenceLow?.toString(),
-    referenceHigh: body.referenceHigh?.toString(),
-    referenceRange: body.referenceRange,
-    sortOrder: body.sortOrder,
-  }).returning();
+  const parameterId = String(req.params.id);
+  const transactionResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`select "id" from "parameters" where "id" = ${parameterId} for update`);
+    const ranges = await tx.select().from(parameterReferenceRanges)
+      .where(eq(parameterReferenceRanges.parameterId, parameterId));
+    const ageOverlaps = (leftMin: number, leftMax: number | null, rightMin: number, rightMax: number | null) =>
+      leftMin <= (rightMax ?? Infinity) && rightMin <= (leftMax ?? Infinity);
+    const genderOverlaps = (left: string, right: string) => left === "all" || right === "all" || left === right;
+    const ambiguous = ranges.find((range) =>
+      range.sortOrder === body.sortOrder &&
+      genderOverlaps(range.gender, body.gender) &&
+      ageOverlaps(range.ageMin, range.ageMax, body.ageMin, body.ageMax ?? null)
+    );
+    if (ambiguous) return null;
+    return tx.insert(parameterReferenceRanges).values({
+      parameterId,
+      gender: body.gender,
+      ageMin: body.ageMin,
+      ageMax: body.ageMax,
+      referenceLow: body.referenceLow?.toString(),
+      referenceHigh: body.referenceHigh?.toString(),
+      referenceRange: body.referenceRange,
+      sortOrder: body.sortOrder,
+    }).returning();
+  });
+  if (!transactionResult) {
+    return res.status(409).json({ error: "Overlapping reference profile has the same priority" });
+  }
+  const [created] = transactionResult;
   res.status(201).json(created);
 }));
 
@@ -293,8 +312,8 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
     gender: z.enum(["all", "male", "female", "other"]).optional(),
     ageMin: z.coerce.number().int().nonnegative().optional(),
     ageMax: z.coerce.number().int().nonnegative().nullable().optional(),
-    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
-    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceLow: z.union([z.null(), z.coerce.number()]).optional(),
+    referenceHigh: z.union([z.null(), z.coerce.number()]).optional(),
     referenceRange: z.string().nullable().optional(),
     sortOrder: z.coerce.number().int().nonnegative().optional(),
   }).parse(req.body);
@@ -322,22 +341,27 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
       Number(effective.referenceLow) > Number(effective.referenceHigh)) {
     return res.status(400).json({ error: "Reference low cannot exceed reference high" });
   }
-  const ranges = await db.select().from(parameterReferenceRanges)
-    .where(eq(parameterReferenceRanges.parameterId, existing.parameterId));
-  const ageOverlaps = (leftMin: number, leftMax: number | null, rightMin: number, rightMax: number | null) =>
-    leftMin <= (rightMax ?? Infinity) && rightMin <= (leftMax ?? Infinity);
-  const genderOverlaps = (left: string, right: string) => left === "all" || right === "all" || left === right;
-  const ambiguous = ranges.find((range) =>
-    range.id !== existing.id &&
-    range.sortOrder === effective.sortOrder &&
-    genderOverlaps(range.gender, effective.gender) &&
-    ageOverlaps(range.ageMin, range.ageMax, effective.ageMin, effective.ageMax)
-  );
-  if (ambiguous) {
+  const transactionResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`select "id" from "parameters" where "id" = ${existing.parameterId} for update`);
+    const ranges = await tx.select().from(parameterReferenceRanges)
+      .where(eq(parameterReferenceRanges.parameterId, existing.parameterId));
+    const ageOverlaps = (leftMin: number, leftMax: number | null, rightMin: number, rightMax: number | null) =>
+      leftMin <= (rightMax ?? Infinity) && rightMin <= (leftMax ?? Infinity);
+    const genderOverlaps = (left: string, right: string) => left === "all" || right === "all" || left === right;
+    const ambiguous = ranges.find((range) =>
+      range.id !== existing.id &&
+      range.sortOrder === effective.sortOrder &&
+      genderOverlaps(range.gender, effective.gender) &&
+      ageOverlaps(range.ageMin, range.ageMax, effective.ageMin, effective.ageMax)
+    );
+    if (ambiguous) return null;
+    return tx.update(parameterReferenceRanges).set(values)
+      .where(eq(parameterReferenceRanges.id, String(req.params.id))).returning();
+  });
+  if (!transactionResult) {
     return res.status(409).json({ error: "Overlapping reference profile has the same priority" });
   }
-  const [updated] = await db.update(parameterReferenceRanges).set(values)
-    .where(eq(parameterReferenceRanges.id, String(req.params.id))).returning();
+  const [updated] = transactionResult;
   if (!updated) return res.status(404).json({ error: "Reference range not found" });
   res.json(updated);
 }));

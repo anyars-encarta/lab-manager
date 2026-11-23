@@ -82,6 +82,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const [submissionError, setSubmissionError] = useState("");
   const requestGeneration = useRef(0);
   const parameterLoadGeneration = useRef(0);
+  const selectedTestIdRef = useRef("");
   const profileSessionGeneration = useRef(0);
   const savedParameterIdRef = useRef<string | null>(null);
 
@@ -104,6 +105,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   };
 
   const loadParameters = async (investigationId: string, generation = requestGeneration.current) => {
+    if (selectedTestIdRef.current !== investigationId) return;
     const parameterGeneration = ++parameterLoadGeneration.current;
     setParameters([]);
     try {
@@ -125,6 +127,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   useEffect(() => {
     ++parameterLoadGeneration.current;
     setParameters([]);
+    selectedTestIdRef.current = selectedTestId;
     if (selectedTestId) void loadParameters(selectedTestId);
   }, [selectedTestId]);
 
@@ -171,7 +174,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       if (profileSession === profileSessionGeneration.current) {
         setSubmissionError(error instanceof Error ? error.message : "Unable to load reference ranges");
       }
-    } finally {
     }
   };
 
@@ -181,9 +183,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     setSubmissionError("");
     const form = new FormData(event.currentTarget);
     const values = Object.fromEntries(form.entries());
-    const coveredTariffValue = Number(coveredTariff);
-    const uncoveredTariffValue = Number(uncoveredTariff);
-    const topUpValue = Number(topUp);
+    const coveredTariffValue = Number(values.coveredTariff);
+    const uncoveredTariffValue = Number(values.uncoveredTariff);
+    const topUpValue = Number(values.topUp);
     if ([coveredTariffValue, uncoveredTariffValue, topUpValue].some((value) => !Number.isFinite(value) || value < 0)) {
       setSubmissionError("Enter valid covered, uncovered, and top-up tariff amounts.");
       setSaving(false);
@@ -248,8 +250,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       active: parameterActive,
     };
     try {
-      const response = await fetch(editingParameter ? `${API_URL}/api/parameters/${editingParameter.id}` : `${API_URL}/api/investigations/${selectedTestId}/parameters`, {
-        method: editingParameter ? "PATCH" : "POST",
+      const retainedParameterId = editingParameter?.id || savedParameterIdRef.current;
+      const response = await fetch(retainedParameterId ? `${API_URL}/api/parameters/${retainedParameterId}` : `${API_URL}/api/investigations/${selectedTestId}/parameters`, {
+        method: retainedParameterId ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -360,7 +363,12 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                   <InvestigationSelect
                     investigations={investigations}
                     value={selectedTestId}
-                    onChange={setSelectedTestId}
+                    onChange={(investigationId) => {
+                      selectedTestIdRef.current = investigationId;
+                      ++parameterLoadGeneration.current;
+                      setParameters([]);
+                      setSelectedTestId(investigationId);
+                    }}
                   />
                   {canWrite && <Button disabled={!selectedTestId} className="gap-2" onClick={() => openParameterDialog()}><Plus className="h-4 w-4" />Add parameter</Button>}
                 </div>

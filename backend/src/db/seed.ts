@@ -237,7 +237,7 @@ async function seed() {
 
   const specimenFor = (name: string) => {
     const lower = name.toLowerCase();
-    if (lower.includes("urine") || lower.includes("urea") || lower.includes("bence")) return "Urine";
+    if (lower.includes("urine") || lower.includes("bence")) return "Urine";
     if (lower.includes("stool")) return "Stool";
     if (lower.includes("semen")) return "Semen";
     if (lower.includes("swab") || lower.includes("pap smear") || lower.includes("biopsy") ||
@@ -274,6 +274,14 @@ async function seed() {
       where: eq(investigations.code, code),
     });
     if (existing) {
+      const legacyPrice = existing.price ?? "0";
+      await db.update(investigations).set({
+        coveredTariff: existing.covered ? legacyPrice : "0.00",
+        uncoveredTariff: existing.covered ? "0.00" : legacyPrice,
+        topUp: "0.00",
+        category: "investigation",
+        active: existing.active,
+      }).where(eq(investigations.id, existing.id));
       existingCount += 1;
       continue;
     }
