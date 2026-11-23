@@ -24,6 +24,7 @@ type Investigation = {
   specimenType?: string;
   price: string | number;
   active: boolean;
+  covered: boolean;
 };
 type Parameter = {
   id: string;
@@ -69,6 +70,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const [editingTest, setEditingTest] = useState<Investigation | null>(null);
   const [editingParameter, setEditingParameter] = useState<Parameter | null>(null);
   const [parameterActive, setParameterActive] = useState(true);
+  const [covered, setCovered] = useState(true);
   const [selectedTestId, setSelectedTestId] = useState("");
   const [saving, setSaving] = useState(false);
   const [submissionError, setSubmissionError] = useState("");
@@ -76,7 +78,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const parameterLoadGeneration = useRef(0);
   const profileSessionGeneration = useRef(0);
   const savedParameterIdRef = useRef<string | null>(null);
-  const [profilesLoading, setProfilesLoading] = useState(false);
 
   const load = async () => {
     const generation = ++requestGeneration.current;
@@ -123,6 +124,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
 
   const openTestDialog = (test?: Investigation) => {
     setEditingTest(test || null);
+    setCovered(test?.covered ?? true);
     setSubmissionError("");
     setTestDialogOpen(true);
   };
@@ -130,7 +132,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const openParameterDialog = (parameter?: Parameter) => {
     const profileSession = ++profileSessionGeneration.current;
     setReferenceProfiles([]);
-    setProfilesLoading(Boolean(parameter));
     savedParameterIdRef.current = parameter?.id ?? null;
     setProfileDraft({
       gender: "all",
@@ -149,7 +150,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   };
 
   const loadReferenceProfiles = async (parameterId: string, profileSession = profileSessionGeneration.current) => {
-    setProfilesLoading(true);
     setReferenceProfiles([]);
     try {
       const response = await fetch(`${API_URL}/api/parameters/${parameterId}/reference-ranges`, { credentials: "include" });
@@ -163,7 +163,6 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
         setSubmissionError(error instanceof Error ? error.message : "Unable to load reference ranges");
       }
     } finally {
-      if (profileSession === profileSessionGeneration.current) setProfilesLoading(false);
     }
   };
 
@@ -186,6 +185,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       name: String(values.name || "").trim(),
       specimenType: editingTest ? String(values.specimenType || "") : String(values.specimenType || "").trim() || undefined,
       price,
+      covered,
     };
     try {
       const response = await fetch(editingTest ? `${API_URL}/api/investigations/${editingTest.id}` : `${API_URL}/api/investigations`, {
@@ -319,13 +319,14 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
             <CardContent className="p-0">
               {loading ? <div className="py-16 text-center text-sm text-muted-foreground">Loading investigations...</div> : filtered.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">No investigations found</div> : (
                 <Table>
-                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Price</TableHead><TableHead>Status</TableHead>{canWrite && <TableHead className="text-right">Action</TableHead>}</TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Price</TableHead><TableHead>Covered</TableHead><TableHead>Status</TableHead>{canWrite && <TableHead className="text-right">Action</TableHead>}</TableRow></TableHeader>
                   <TableBody>{filtered.map((test) => (
                     <TableRow key={test.id}>
                       <TableCell>{test.gdrgCode ? <Badge variant="outline">{test.gdrgCode}</Badge> : "—"}</TableCell>
                       <TableCell>{test.name}</TableCell>
                       <TableCell>{test.specimenType || "—"}</TableCell>
                       <TableCell>GH₵ {Number(test.price).toFixed(2)}</TableCell>
+                      <TableCell><Badge variant={test.covered ? "default" : "secondary"}>{test.covered ? "Covered" : "Not covered"}</Badge></TableCell>
                       <TableCell><Badge variant={test.active ? "default" : "secondary"}>{test.active ? "Active" : "Inactive"}</Badge></TableCell>
                       {canWrite && <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>}
                     </TableRow>
@@ -383,6 +384,13 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
               </div>
               <Field name="name" label="Investigation name" required defaultValue={editingTest?.name} />
               <Field name="price" label="Price (GH₵)" type="number" step="0.01" required defaultValue={editingTest?.price} />
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <Label htmlFor="investigation-covered">Covered investigation</Label>
+                  <p className="text-xs text-muted-foreground">Controls whether this investigation is covered by the NHIA.</p>
+                </div>
+                <Switch id="investigation-covered" checked={covered} onCheckedChange={setCovered} />
+              </div>
             </div>
             {submissionError && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{submissionError}</p>}
             <DialogFooter><Button type="button" variant="outline" onClick={() => setTestDialogOpen(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save investigation"}</Button></DialogFooter>

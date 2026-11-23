@@ -129,6 +129,7 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
     name: z.string().min(2),
     specimenType: z.string().trim().optional(),
     price: z.coerce.number().nonnegative(),
+    covered: z.boolean().optional(),
   }).parse(req.body);
   const facility = (await db.select().from(facilities).orderBy(asc(facilities.name)).limit(1))[0];
   if (!facility) return res.status(400).json({ error: "At least one facility is required" });
@@ -139,6 +140,8 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
     name: body.name,
     specimenType: body.specimenType,
     price: body.price.toFixed(2),
+    category: "investigation",
+    covered: body.covered ?? true,
   }).returning();
   res.status(201).json(created);
 }));
@@ -150,11 +153,12 @@ api.patch("/investigations/:id", requireRole("admin"), asyncRoute(async (req, re
     specimenType: z.string().optional(),
     price: z.coerce.number().nonnegative().optional(),
     active: z.boolean().optional(),
+    covered: z.boolean().optional(),
   }).parse(req.body);
   const id = String(req.params.id);
   const values = body.price === undefined
-    ? { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active }
-    : { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active, price: body.price.toFixed(2) };
+    ? { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active, covered: body.covered }
+    : { gdrgCode: body.gdrgCode, name: body.name, specimenType: body.specimenType, active: body.active, covered: body.covered, price: body.price.toFixed(2) };
   const [updated] = await db.update(investigations).set(values).where(eq(investigations.id, id)).returning();
   if (!updated) return res.status(404).json({ error: "Investigation not found" });
   res.json(updated);

@@ -315,9 +315,9 @@ export function PatientsPage() {
           <DialogTrigger asChild>
             <Button className="gap-2"><Plus className="h-4 w-4" />New patient / request</Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
-            <form onSubmit={submit}>
-              <DialogHeader>
+          <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-3xl">
+            <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+              <DialogHeader className="shrink-0 px-6 pt-6">
                 <DialogTitle>{patientMode === "existing" ? "Existing patient test request" : "New patient and test request"}</DialogTitle>
                 <DialogDescription>
                   {patientMode === "existing"
@@ -325,11 +325,11 @@ export function PatientsPage() {
                     : "Capture patient details, the referring facility and requested investigations."}
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-1">
+              <div className="mx-6 grid shrink-0 grid-cols-2 gap-2 rounded-lg bg-muted p-1">
                 <Button type="button" size="sm" variant={patientMode === "existing" ? "default" : "ghost"} onClick={() => { setPatientMode("existing"); setSelectedExistingPatientId(""); setError(""); }}>Existing patient</Button>
                 <Button type="button" size="sm" variant={patientMode === "new" ? "default" : "ghost"} onClick={() => { setPatientMode("new"); setSelectedExistingPatientId(""); setError(""); }}>New patient</Button>
               </div>
-              <div className="grid gap-6 py-5 lg:grid-cols-[1fr_0.9fr]">
+              <div className="grid min-h-0 flex-1 gap-6 overflow-y-auto px-6 py-5 lg:grid-cols-[1fr_0.9fr]">
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-3">
                     <div className="space-y-2">
@@ -427,8 +427,8 @@ export function PatientsPage() {
                   </CardContent>
                 </Card>
               </div>
-              {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-              <DialogFooter>
+              {error && <p className="mx-6 mb-4 shrink-0 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+              <DialogFooter className="shrink-0 border-t px-6 py-4">
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={saving}>
                   {saving
@@ -455,15 +455,15 @@ export function PatientsPage() {
       )}
 
       <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
-          <form onSubmit={submitExistingRequest}>
-            <DialogHeader>
+        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-2xl">
+          <form onSubmit={submitExistingRequest} className="flex min-h-0 flex-1 flex-col">
+            <DialogHeader className="shrink-0 px-6 pt-6">
               <DialogTitle>Request investigations</DialogTitle>
               <DialogDescription>
                 {requestPatient ? `Create a laboratory request for ${requestPatient.firstName} ${requestPatient.lastName} (${requestPatient.patientNumber}).` : "Select investigations for this patient."}
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-5 py-5">
+            <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto px-6 py-5">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Referring facility</Label>
@@ -502,8 +502,8 @@ export function PatientsPage() {
                 </CardContent>
               </Card>
             </div>
-            {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-            <DialogFooter>
+            {error && <p className="mx-6 mb-4 shrink-0 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+            <DialogFooter className="shrink-0 border-t px-6 py-4">
               <Button type="button" variant="outline" onClick={() => setRequestDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving ? "Creating request..." : "Create laboratory request"}</Button>
             </DialogFooter>

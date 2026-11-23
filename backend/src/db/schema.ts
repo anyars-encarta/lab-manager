@@ -144,6 +144,7 @@ export const investigations = pgTable("investigations", {
   price: numeric("price", { precision: 12, scale: 2 }).notNull().default("0"),
   nhiaCode: varchar("nhia_code", { length: 100 }),
   active: boolean("active").notNull().default(true),
+  covered: boolean("covered").notNull().default(true),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

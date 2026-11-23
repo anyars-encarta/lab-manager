@@ -29,6 +29,13 @@
       "when": 1795422437175,
       "tag": "0003_small_silhouette",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795431471732,
+      "tag": "0004_futuristic_stone_men",
+      "breakpoints": true
     }
   ]
 }
