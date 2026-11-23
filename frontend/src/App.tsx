@@ -69,7 +69,7 @@ function ResourceGuard({
     return <ReferringFacilitiesPage />;
   }
   if (allowed && resource === "investigations") {
-    return <InvestigationsPage />;
+    return <InvestigationsPage canWrite={role === "admin"} />;
   }
   return allowed ? <LaboratoryWorkspace section={section} /> : <AccessDenied />;
 }

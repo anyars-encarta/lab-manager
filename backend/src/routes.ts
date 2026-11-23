@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { auth } from "./auth.js";
@@ -28,6 +28,17 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
   };
 
 const numberValue = (value: unknown) => Number(value ?? 0);
+const calendarAge = (birthDate: Date, at: Date = new Date()) => {
+  const today = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const birth = new Date(Date.UTC(birthDate.getUTCFullYear(), birthDate.getUTCMonth(), birthDate.getUTCDate()));
+  if (today < birth) return 0;
+  let age = today.getUTCFullYear() - birth.getUTCFullYear();
+  if (
+    today.getUTCMonth() < birth.getUTCMonth() ||
+    (today.getUTCMonth() === birth.getUTCMonth() && today.getUTCDate() < birth.getUTCDate())
+  ) age -= 1;
+  return Math.max(0, age);
+};
 const prefixNumber = (prefix: string) => {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   return `${prefix}-${date}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
@@ -114,7 +125,7 @@ api.get("/investigations", asyncRoute(async (req, res) => {
 
 api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
-    gdrgCode: z.string().trim().optional(),
+    gdrgCode: z.string().trim().max(50).optional(),
     name: z.string().min(2),
     specimenType: z.string().trim().optional(),
     price: z.coerce.number().nonnegative(),
@@ -134,7 +145,7 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
 
 api.patch("/investigations/:id", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
-    gdrgCode: z.string().nullable().optional(),
+    gdrgCode: z.string().trim().max(50).nullable().optional(),
     name: z.string().min(2).optional(),
     specimenType: z.string().optional(),
     price: z.coerce.number().nonnegative().optional(),
@@ -158,19 +169,24 @@ api.post("/investigations/:id/parameters", requireRole("admin"), asyncRoute(asyn
   const body = z.object({
     code: z.string().min(1),
     name: z.string().min(1),
-    unit: z.string().optional(),
-    referenceRange: z.string().optional(),
-    referenceLow: z.coerce.number().optional(),
-    referenceHigh: z.coerce.number().optional(),
+    unit: z.string().nullable().optional(),
+    referenceRange: z.string().nullable().optional(),
+    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
     dataType: z.enum(["text", "number", "boolean"]).default("text"),
     decimalPlaces: z.number().int().nonnegative().default(0),
     sortOrder: z.number().int().nonnegative().default(0),
+    active: z.boolean().optional(),
   }).parse(req.body);
+  if (body.referenceLow != null && body.referenceHigh != null && body.referenceLow > body.referenceHigh) {
+    return res.status(400).json({ error: "Reference low cannot exceed reference high" });
+  }
   const [created] = await db.insert(parameters).values({
     ...body,
-    referenceLow: body.referenceLow?.toString(),
-    referenceHigh: body.referenceHigh?.toString(),
+    referenceLow: body.referenceLow == null ? null : body.referenceLow.toString(),
+    referenceHigh: body.referenceHigh == null ? null : body.referenceHigh.toString(),
     investigationId: String(req.params.id),
+    active: body.active ?? true,
   }).returning();
   res.status(201).json(created);
 }));
@@ -179,8 +195,8 @@ api.patch("/parameters/:id", requireRole("admin"), asyncRoute(async (req, res) =
   const body = z.object({
     code: z.string().min(1).optional(),
     name: z.string().min(1).optional(),
-    unit: z.string().optional(),
-    referenceRange: z.string().optional(),
+    unit: z.string().nullable().optional(),
+    referenceRange: z.string().nullable().optional(),
     referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
     referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
     dataType: z.enum(["text", "number", "boolean"]).optional(),
@@ -188,6 +204,13 @@ api.patch("/parameters/:id", requireRole("admin"), asyncRoute(async (req, res) =
     sortOrder: z.number().int().nonnegative().optional(),
     active: z.boolean().optional(),
   }).parse(req.body);
+  const existing = await db.query.parameters.findFirst({ where: eq(parameters.id, String(req.params.id)) });
+  if (!existing) return res.status(404).json({ error: "Parameter not found" });
+  const effectiveLow = body.referenceLow === undefined ? existing.referenceLow : body.referenceLow?.toString() ?? null;
+  const effectiveHigh = body.referenceHigh === undefined ? existing.referenceHigh : body.referenceHigh?.toString() ?? null;
+  if (effectiveLow != null && effectiveHigh != null && Number(effectiveLow) > Number(effectiveHigh)) {
+    return res.status(400).json({ error: "Reference low cannot exceed reference high" });
+  }
   const values = {
     ...body,
     referenceLow: body.referenceLow === undefined ? undefined : body.referenceLow?.toString() ?? null,
@@ -208,9 +231,9 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
   const body = z.object({
     gender: z.enum(["all", "male", "female", "other"]).default("all"),
     ageMin: z.coerce.number().int().nonnegative().default(0),
-    ageMax: z.coerce.number().int().positive().nullable().optional(),
-    referenceLow: z.coerce.number().nullable().optional(),
-    referenceHigh: z.coerce.number().nullable().optional(),
+    ageMax: z.coerce.number().int().nonnegative().nullable().optional(),
+    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
     referenceRange: z.string().nullable().optional(),
     sortOrder: z.coerce.number().int().nonnegative().default(0),
   }).parse(req.body);
@@ -239,9 +262,9 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
   const body = z.object({
     gender: z.enum(["all", "male", "female", "other"]).optional(),
     ageMin: z.coerce.number().int().nonnegative().optional(),
-    ageMax: z.coerce.number().int().positive().nullable().optional(),
-    referenceLow: z.coerce.number().nullable().optional(),
-    referenceHigh: z.coerce.number().nullable().optional(),
+    ageMax: z.coerce.number().int().nonnegative().nullable().optional(),
+    referenceLow: z.union([z.coerce.number(), z.null()]).optional(),
+    referenceHigh: z.union([z.coerce.number(), z.null()]).optional(),
     referenceRange: z.string().nullable().optional(),
     sortOrder: z.coerce.number().int().nonnegative().optional(),
   }).parse(req.body);
@@ -250,6 +273,39 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
     referenceLow: body.referenceLow === undefined ? undefined : body.referenceLow?.toString() ?? null,
     referenceHigh: body.referenceHigh === undefined ? undefined : body.referenceHigh?.toString() ?? null,
   };
+  const existing = await db.query.parameterReferenceRanges.findFirst({
+    where: eq(parameterReferenceRanges.id, String(req.params.id)),
+  });
+  if (!existing) return res.status(404).json({ error: "Reference range not found" });
+  const effective = {
+    gender: body.gender ?? existing.gender,
+    ageMin: body.ageMin ?? existing.ageMin,
+    ageMax: body.ageMax === undefined ? existing.ageMax : body.ageMax,
+    referenceLow: body.referenceLow === undefined ? existing.referenceLow : body.referenceLow,
+    referenceHigh: body.referenceHigh === undefined ? existing.referenceHigh : body.referenceHigh,
+    sortOrder: body.sortOrder ?? existing.sortOrder,
+  };
+  if (effective.ageMax !== null && effective.ageMax < effective.ageMin) {
+    return res.status(400).json({ error: "Maximum age must be greater than or equal to minimum age" });
+  }
+  if (effective.referenceLow != null && effective.referenceHigh != null &&
+      Number(effective.referenceLow) > Number(effective.referenceHigh)) {
+    return res.status(400).json({ error: "Reference low cannot exceed reference high" });
+  }
+  const ranges = await db.select().from(parameterReferenceRanges)
+    .where(eq(parameterReferenceRanges.parameterId, existing.parameterId));
+  const ageOverlaps = (leftMin: number, leftMax: number | null, rightMin: number, rightMax: number | null) =>
+    leftMin <= (rightMax ?? Infinity) && rightMin <= (leftMax ?? Infinity);
+  const genderOverlaps = (left: string, right: string) => left === "all" || right === "all" || left === right;
+  const ambiguous = ranges.find((range) =>
+    range.id !== existing.id &&
+    range.sortOrder === effective.sortOrder &&
+    genderOverlaps(range.gender, effective.gender) &&
+    ageOverlaps(range.ageMin, range.ageMax, effective.ageMin, effective.ageMax)
+  );
+  if (ambiguous) {
+    return res.status(409).json({ error: "Overlapping reference profile has the same priority" });
+  }
   const [updated] = await db.update(parameterReferenceRanges).set(values)
     .where(eq(parameterReferenceRanges.id, String(req.params.id))).returning();
   if (!updated) return res.status(404).json({ error: "Reference range not found" });
@@ -265,8 +321,16 @@ api.delete("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(a
 
 api.get("/patients", asyncRoute(async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
-  const rows = await db.select().from(patients).orderBy(desc(patients.createdAt)).limit(100);
-  res.json(search ? rows.filter((patient) => `${patient.firstName} ${patient.lastName} ${patient.patientNumber} ${patient.nhisNumber ?? ""}`.toLowerCase().includes(search)) : rows);
+  const rows = search
+    ? await db.select().from(patients).where(or(
+        ilike(patients.firstName, `%${search}%`),
+        ilike(patients.lastName, `%${search}%`),
+        ilike(patients.patientNumber, `%${search}%`),
+        ilike(patients.nhisNumber, `%${search}%`),
+        ilike(patients.phone, `%${search}%`),
+      )).orderBy(desc(patients.createdAt)).limit(100)
+    : await db.select().from(patients).orderBy(desc(patients.createdAt)).limit(100);
+  res.json(rows);
 }));
 
 api.post("/patients", requireRole("admin", "frontdesk"), asyncRoute(async (req, res) => {
@@ -467,62 +531,70 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
   const itemId = String(req.params.itemId);
   await db.transaction(async (tx) => {
     await tx.delete(resultEntries).where(eq(resultEntries.orderItemId, itemId));
-    await tx.insert(resultEntries).values(await Promise.all(body.results.map(async (result) => {
-      const parameter = await tx.query.parameters.findFirst({ where: eq(parameters.id, result.parameterId) });
-      const orderItem = await tx.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
-      const order = orderItem
-        ? await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) })
-        : null;
-      const patient = order
-        ? await tx.query.patients.findFirst({ where: eq(patients.id, order.patientId) })
-        : null;
+    const orderItem = await tx.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
+    const order = orderItem
+      ? await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) })
+      : null;
+    const patient = order
+      ? await tx.query.patients.findFirst({ where: eq(patients.id, order.patientId) })
+      : null;
+    const parameterIds = [...new Set(body.results.map((result) => result.parameterId))];
+    const parameterRows = parameterIds.length
+      ? await tx.select().from(parameters).where(sql`${parameters.id} in ${parameterIds}`)
+      : [];
+    const rangeRows = parameterIds.length
+      ? await tx.select().from(parameterReferenceRanges)
+          .where(sql`${parameterReferenceRanges.parameterId} in ${parameterIds}`)
+          .orderBy(asc(parameterReferenceRanges.sortOrder), asc(parameterReferenceRanges.id))
+      : [];
+    await tx.insert(resultEntries).values(body.results.map((result) => {
+      const parameter = parameterRows.find((row) => row.id === result.parameterId);
       let abnormalFlag = result.abnormalFlag;
-      const numericValue = Number(result.value);
+      let referenceLow: string | null = null;
+      let referenceHigh: string | null = null;
+      const trimmedValue = result.value.trim();
+      const numericValue = trimmedValue === "" ? NaN : Number(trimmedValue);
       let matchedRange = null;
       if (parameter && Number.isFinite(numericValue)) {
-        const ranges = await tx.select().from(parameterReferenceRanges)
-          .where(eq(parameterReferenceRanges.parameterId, parameter.id))
-          .orderBy(asc(parameterReferenceRanges.sortOrder));
         const patientGender = patient?.gender?.toLowerCase();
-        const age = patient?.dateOfBirth
-          ? Math.max(0, Math.floor((Date.now() - patient.dateOfBirth.getTime()) / (365.25 * 86400000)))
-          : null;
-        matchedRange = ranges.find((range) => {
+        const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
+        matchedRange = rangeRows.find((range) => {
+          if (range.parameterId !== parameter.id) return false;
           const genderMatches = range.gender === "all" || (patientGender != null && range.gender === patientGender);
-          const ageMatches = age !== null &&
-            age >= range.ageMin &&
+          const ageMatches = age === null
+            ? range.ageMin === 0 && range.ageMax === null
+            : age >= range.ageMin &&
             (range.ageMax === null || age <= range.ageMax);
-          return genderMatches && (range.ageMin === 0 && range.ageMax === null ? true : ageMatches);
+          return genderMatches && ageMatches;
         }) ?? null;
       }
-      if (parameter?.dataType === "number" && matchedRange?.referenceLow != null && matchedRange.referenceHigh != null) {
-        if (Number.isFinite(numericValue)) {
-          abnormalFlag = numericValue < Number(matchedRange.referenceLow)
-            ? "low"
-            : numericValue > Number(matchedRange.referenceHigh)
-              ? "high"
-              : "normal";
-        }
-      } else
-      if (parameter?.dataType === "number" && parameter.referenceLow && parameter.referenceHigh) {
-        const numericValue = Number(result.value);
-        if (Number.isFinite(numericValue)) {
-          abnormalFlag = numericValue < Number(parameter.referenceLow)
-            ? "low"
-            : numericValue > Number(parameter.referenceHigh)
-              ? "high"
-              : "normal";
-        }
+      if (parameter?.dataType === "number" && matchedRange && result.abnormalFlag == null && Number.isFinite(numericValue)) {
+        referenceLow = matchedRange.referenceLow;
+        referenceHigh = matchedRange.referenceHigh;
+        if (referenceLow != null && numericValue < Number(referenceLow)) abnormalFlag = "low";
+        else if (referenceHigh != null && numericValue > Number(referenceHigh)) abnormalFlag = "high";
+        else if (referenceLow != null || referenceHigh != null) abnormalFlag = "normal";
+      } else if (parameter?.dataType === "number" && result.abnormalFlag == null && Number.isFinite(numericValue) &&
+                 parameter.referenceLow != null && parameter.referenceHigh != null) {
+        referenceLow = parameter.referenceLow;
+        referenceHigh = parameter.referenceHigh;
+        abnormalFlag = numericValue < Number(referenceLow)
+          ? "low"
+          : numericValue > Number(referenceHigh)
+            ? "high"
+            : "normal";
       }
       return {
         orderItemId: itemId,
         parameterId: result.parameterId,
         value: result.value,
         abnormalFlag,
+        referenceLow,
+        referenceHigh,
         remarks: result.remarks,
         enteredBy: req.appUser!.id,
       };
-    })));
+    }));
   });
   await db.update(labOrders).set({ status: "processing" }).where(eq(labOrders.id, orderId));
   res.status(201).json({ saved: body.results.length });
@@ -564,7 +636,12 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
     for (const row of rows) {
       const parameter = await db.query.parameters.findFirst({ where: eq(parameters.id, row.parameterId) });
       pdf.fontSize(10).text(`${parameter?.name ?? "Parameter"}: ${row.value}${parameter?.unit ? ` ${parameter.unit}` : ""}${row.abnormalFlag ? ` (${row.abnormalFlag})` : ""}`);
-      if (parameter?.referenceRange) pdf.fontSize(8).text(`Reference: ${parameter.referenceRange}`);
+      if (row.referenceLow != null || row.referenceHigh != null) {
+        const interval = `${row.referenceLow != null ? row.referenceLow : "—"} to ${row.referenceHigh != null ? row.referenceHigh : "—"}${parameter?.unit ? ` ${parameter.unit}` : ""}`;
+        pdf.fontSize(8).text(`Reference interval: ${interval}`);
+      } else if (parameter?.referenceRange) {
+        pdf.fontSize(8).text(`Reference: ${parameter.referenceRange}`);
+      }
     }
     pdf.moveDown();
   }

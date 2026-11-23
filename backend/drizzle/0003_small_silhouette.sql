@@ -1,0 +1,5 @@
+ALTER TABLE "result_entries" ADD COLUMN "reference_low" numeric(12, 4);--> statement-breakpoint
+ALTER TABLE "result_entries" ADD COLUMN "reference_high" numeric(12, 4);--> statement-breakpoint
+ALTER TABLE "parameter_reference_ranges" ADD CONSTRAINT "reference_ranges_age_check" CHECK ("parameter_reference_ranges"."age_min" >= 0 and ("parameter_reference_ranges"."age_max" is null or "parameter_reference_ranges"."age_max" >= "parameter_reference_ranges"."age_min"));--> statement-breakpoint
+ALTER TABLE "parameter_reference_ranges" ADD CONSTRAINT "reference_ranges_bounds_check" CHECK (("parameter_reference_ranges"."reference_low" is null or "parameter_reference_ranges"."reference_high" is null or "parameter_reference_ranges"."reference_low" <= "parameter_reference_ranges"."reference_high"));--> statement-breakpoint
+ALTER TABLE "parameters" ADD CONSTRAINT "parameters_reference_bounds_check" CHECK (("parameters"."reference_low" is null or "parameters"."reference_high" is null or "parameters"."reference_low" <= "parameters"."reference_high"));

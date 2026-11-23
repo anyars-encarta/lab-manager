@@ -49,7 +49,7 @@ type ReferenceProfile = {
   sortOrder: number;
 };
 
-export function InvestigationsPage() {
+export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean }) {
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [parameters, setParameters] = useState<Parameter[]>([]);
   const [referenceProfiles, setReferenceProfiles] = useState<ReferenceProfile[]>([]);
@@ -73,6 +73,10 @@ export function InvestigationsPage() {
   const [saving, setSaving] = useState(false);
   const [submissionError, setSubmissionError] = useState("");
   const requestGeneration = useRef(0);
+  const parameterLoadGeneration = useRef(0);
+  const profileSessionGeneration = useRef(0);
+  const savedParameterIdRef = useRef<string | null>(null);
+  const [profilesLoading, setProfilesLoading] = useState(false);
 
   const load = async () => {
     const generation = ++requestGeneration.current;
@@ -93,19 +97,27 @@ export function InvestigationsPage() {
   };
 
   const loadParameters = async (investigationId: string, generation = requestGeneration.current) => {
+    const parameterGeneration = ++parameterLoadGeneration.current;
+    setParameters([]);
     try {
       const response = await fetch(`${API_URL}/api/investigations/${investigationId}/parameters`, { credentials: "include" });
       if (!response.ok) throw new Error("Unable to load parameters");
       const data = await response.json();
-      if (generation === requestGeneration.current) setParameters(Array.isArray(data) ? data : []);
+      if (generation === requestGeneration.current && parameterGeneration === parameterLoadGeneration.current) {
+        setParameters(Array.isArray(data) ? data : []);
+      }
     } catch (error) {
-      if (generation === requestGeneration.current) setLoadError(error instanceof Error ? error.message : "Unable to load parameters");
+      if (generation === requestGeneration.current && parameterGeneration === parameterLoadGeneration.current) {
+        setLoadError(error instanceof Error ? error.message : "Unable to load parameters");
+      }
     }
   };
 
   useEffect(() => { void load(); }, []);
 
   useEffect(() => {
+    ++parameterLoadGeneration.current;
+    setParameters([]);
     if (selectedTestId) void loadParameters(selectedTestId);
   }, [selectedTestId]);
 
@@ -116,22 +128,42 @@ export function InvestigationsPage() {
   };
 
   const openParameterDialog = (parameter?: Parameter) => {
+    const profileSession = ++profileSessionGeneration.current;
+    setReferenceProfiles([]);
+    setProfilesLoading(Boolean(parameter));
+    savedParameterIdRef.current = parameter?.id ?? null;
+    setProfileDraft({
+      gender: "all",
+      ageMin: "0",
+      ageMax: "",
+      referenceRange: "",
+      referenceLow: "",
+      referenceHigh: "",
+    });
     setEditingParameter(parameter || null);
     setParameterActive(parameter?.active ?? true);
     setSubmissionError("");
     setParameterDialogOpen(true);
-    if (parameter) void loadReferenceProfiles(parameter.id);
+    if (parameter) void loadReferenceProfiles(parameter.id, profileSession);
     else setReferenceProfiles([]);
   };
 
-  const loadReferenceProfiles = async (parameterId: string) => {
+  const loadReferenceProfiles = async (parameterId: string, profileSession = profileSessionGeneration.current) => {
+    setProfilesLoading(true);
+    setReferenceProfiles([]);
     try {
       const response = await fetch(`${API_URL}/api/parameters/${parameterId}/reference-ranges`, { credentials: "include" });
       if (!response.ok) throw new Error("Unable to load reference ranges");
       const data = await response.json();
-      setReferenceProfiles(Array.isArray(data) ? data : []);
+      if (profileSession === profileSessionGeneration.current) {
+        setReferenceProfiles(Array.isArray(data) ? data : []);
+      }
     } catch (error) {
-      setSubmissionError(error instanceof Error ? error.message : "Unable to load reference ranges");
+      if (profileSession === profileSessionGeneration.current) {
+        setSubmissionError(error instanceof Error ? error.message : "Unable to load reference ranges");
+      }
+    } finally {
+      if (profileSession === profileSessionGeneration.current) setProfilesLoading(false);
     }
   };
 
@@ -148,9 +180,11 @@ export function InvestigationsPage() {
       return;
     }
     const payload = {
-      gdrgCode: String(values.gdrgCode || "").trim() || undefined,
+      gdrgCode: editingTest
+        ? String(values.gdrgCode || "").trim() || null
+        : String(values.gdrgCode || "").trim() || undefined,
       name: String(values.name || "").trim(),
-      specimenType: String(values.specimenType || "").trim() || undefined,
+      specimenType: editingTest ? String(values.specimenType || "") : String(values.specimenType || "").trim() || undefined,
       price,
     };
     try {
@@ -187,8 +221,12 @@ export function InvestigationsPage() {
     const payload = {
       code: values.code,
       name: values.name,
-      unit: values.unit || undefined,
-      referenceRange: values.referenceRange || undefined,
+      unit: editingParameter
+        ? String(values.unit || "")
+        : String(values.unit || "").trim() || undefined,
+      referenceRange: editingParameter
+        ? String(values.referenceRange || "")
+        : String(values.referenceRange || "").trim() || undefined,
       referenceLow: values.referenceLow === "" ? null : Number(values.referenceLow),
       referenceHigh: values.referenceHigh === "" ? null : Number(values.referenceHigh),
       dataType: values.dataType,
@@ -208,26 +246,34 @@ export function InvestigationsPage() {
       toast.success(editingParameter ? "Parameter updated" : "Parameter created", {
         description: `${payload.name} was saved successfully.`,
       });
-      const savedParameterId = editingParameter?.id || body?.id;
-      if (savedParameterId && (profileDraft.referenceRange || profileDraft.referenceLow || profileDraft.referenceHigh)) {
+      const savedParameterId = editingParameter?.id || savedParameterIdRef.current || body?.id;
+      if (savedParameterId) savedParameterIdRef.current = savedParameterId;
+      const profileRange = String(values.profileRange || "").trim();
+      const profileAgeMin = String(values.profileAgeMin ?? "0").trim();
+      const profileAgeMax = String(values.profileAgeMax || "").trim();
+      const profileLow = String(values.profileLow || "").trim();
+      const profileHigh = String(values.profileHigh || "").trim();
+      if (savedParameterId && (profileRange || profileLow || profileHigh)) {
         const profileResponse = await fetch(`${API_URL}/api/parameters/${savedParameterId}/reference-ranges`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             gender: profileDraft.gender,
-            ageMin: Number(profileDraft.ageMin || 0),
-            ageMax: profileDraft.ageMax === "" ? null : Number(profileDraft.ageMax),
-            referenceRange: profileDraft.referenceRange || null,
-            referenceLow: profileDraft.referenceLow === "" ? null : Number(profileDraft.referenceLow),
-            referenceHigh: profileDraft.referenceHigh === "" ? null : Number(profileDraft.referenceHigh),
+            ageMin: Number(profileAgeMin || 0),
+            ageMax: profileAgeMax === "" ? null : Number(profileAgeMax),
+            referenceRange: profileRange || null,
+            referenceLow: profileLow === "" ? null : Number(profileLow),
+            referenceHigh: profileHigh === "" ? null : Number(profileHigh),
           }),
         });
         if (!profileResponse.ok) throw new Error("Parameter saved, but reference profile could not be added");
         toast.success("Reference profile added", {
           description: "The age/gender reference range was saved successfully.",
         });
-        await loadReferenceProfiles(savedParameterId);
+        savedParameterIdRef.current = null;
+        setProfileDraft({ gender: "all", ageMin: "0", ageMax: "", referenceRange: "", referenceLow: "", referenceHigh: "" });
+        await loadReferenceProfiles(savedParameterId, profileSessionGeneration.current);
       }
       setParameterDialogOpen(false);
       await loadParameters(selectedTestId);
@@ -255,7 +301,7 @@ export function InvestigationsPage() {
           <h1 className="flex items-center gap-2 text-3xl font-semibold tracking-tight"><Microscope className="h-7 w-7" />Investigations</h1>
           <p className="mt-1 text-sm text-muted-foreground">Register laboratory tests, pricing and result parameters.</p>
         </div>
-        <Button className="gap-2" onClick={() => openTestDialog()}><Plus className="h-4 w-4" />Add investigation</Button>
+        {canWrite && <Button className="gap-2" onClick={() => openTestDialog()}><Plus className="h-4 w-4" />Add investigation</Button>}
       </section>
 
       {loadError && <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm"><span>{loadError}</span><Button size="sm" variant="outline" onClick={() => void load()}>Retry</Button></div>}
@@ -273,7 +319,7 @@ export function InvestigationsPage() {
             <CardContent className="p-0">
               {loading ? <div className="py-16 text-center text-sm text-muted-foreground">Loading investigations...</div> : filtered.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">No investigations found</div> : (
                 <Table>
-                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Price</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>G-DRG</TableHead><TableHead>Investigation</TableHead><TableHead>Specimen</TableHead><TableHead>Price</TableHead><TableHead>Status</TableHead>{canWrite && <TableHead className="text-right">Action</TableHead>}</TableRow></TableHeader>
                   <TableBody>{filtered.map((test) => (
                     <TableRow key={test.id}>
                       <TableCell>{test.gdrgCode ? <Badge variant="outline">{test.gdrgCode}</Badge> : "—"}</TableCell>
@@ -281,7 +327,7 @@ export function InvestigationsPage() {
                       <TableCell>{test.specimenType || "—"}</TableCell>
                       <TableCell>GH₵ {Number(test.price).toFixed(2)}</TableCell>
                       <TableCell><Badge variant={test.active ? "default" : "secondary"}>{test.active ? "Active" : "Inactive"}</Badge></TableCell>
-                      <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>
+                      {canWrite && <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>}
                     </TableRow>
                   ))}</TableBody>
                 </Table>
@@ -300,7 +346,7 @@ export function InvestigationsPage() {
                     value={selectedTestId}
                     onChange={setSelectedTestId}
                   />
-                  <Button disabled={!selectedTestId} className="gap-2" onClick={() => openParameterDialog()}><Plus className="h-4 w-4" />Add parameter</Button>
+                  {canWrite && <Button disabled={!selectedTestId} className="gap-2" onClick={() => openParameterDialog()}><Plus className="h-4 w-4" />Add parameter</Button>}
                 </div>
               </div>
             </CardHeader>
@@ -316,7 +362,7 @@ export function InvestigationsPage() {
                       <TableCell>{parameter.referenceRange || "—"}</TableCell>
                       <TableCell>{parameter.referenceLow != null && parameter.referenceHigh != null ? `${parameter.referenceLow} — ${parameter.referenceHigh}` : "—"}</TableCell>
                       <TableCell><Badge variant="outline">{parameter.dataType}</Badge></TableCell>
-                      <TableCell><Button size="sm" variant="ghost" onClick={() => openParameterDialog(parameter)}><Settings2 className="mr-1 h-4 w-4" />Edit</Button></TableCell>
+                      {canWrite && <TableCell><Button size="sm" variant="ghost" onClick={() => openParameterDialog(parameter)}><Settings2 className="mr-1 h-4 w-4" />Edit</Button></TableCell>}
                     </TableRow>
                   ))}</TableBody>
                 </Table>
@@ -373,7 +419,7 @@ export function InvestigationsPage() {
                 {referenceProfiles.map((profile) => (
                   <div key={profile.id} className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm">
                     <span>{profile.gender} · {profile.ageMin}{profile.ageMax == null ? "+ years" : `-${profile.ageMax} years`} · {profile.referenceRange || `${profile.referenceLow ?? "—"} — ${profile.referenceHigh ?? "—"}`}</span>
-                    <Button type="button" size="sm" variant="ghost" onClick={async () => {
+                    {canWrite && <Button type="button" size="sm" variant="ghost" onClick={async () => {
                       try {
                         const response = await fetch(`${API_URL}/api/parameter-reference-ranges/${profile.id}`, { method: "DELETE", credentials: "include" });
                         if (!response.ok) throw new Error("Unable to delete reference profile");
@@ -386,7 +432,7 @@ export function InvestigationsPage() {
                           description: error instanceof Error ? error.message : "An unexpected error occurred.",
                         });
                       }
-                    }} aria-label="Delete reference profile"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                    }} aria-label="Delete reference profile"><Trash2 className="h-4 w-4 text-destructive" /></Button>}
                   </div>
                 ))}
                 <div className="grid grid-cols-2 gap-3">

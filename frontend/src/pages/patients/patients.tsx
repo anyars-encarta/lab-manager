@@ -40,13 +40,14 @@ export function PatientsPage() {
   const requestGeneration = useRef(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const requestDialogGeneration = useRef(0);
 
   const load = async () => {
     const generation = ++requestGeneration.current;
     setLoading(true);
     setLoadError("");
     try {
-      const patientResponse = await fetch(`${API_URL}/api/patients`, { credentials: "include" });
+      const patientResponse = await fetch(`${API_URL}/api/patients${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ""}`, { credentials: "include" });
       if (!patientResponse.ok) throw new Error(`Unable to load patient records (${patientResponse.status})`);
       const patientData = await patientResponse.json();
       if (generation !== requestGeneration.current) return;
@@ -102,6 +103,11 @@ export function PatientsPage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void load(), 250);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
   const availableTests = useMemo(
     () => investigations.filter((test) => test.active),
     [investigations],
@@ -131,6 +137,7 @@ export function PatientsPage() {
   };
 
   const openExistingRequest = (patient: Patient) => {
+    ++requestDialogGeneration.current;
     setRequestPatient(patient);
     setRequestFacilityId("");
     setSelectedTests([]);
@@ -142,6 +149,7 @@ export function PatientsPage() {
   const submitExistingRequest = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!requestPatient) return;
+    const generation = requestDialogGeneration.current;
     if (!requestFacilityId) {
       setError("Select the referring facility.");
       return;
@@ -171,8 +179,10 @@ export function PatientsPage() {
       toast.success("Laboratory request created", {
         description: `Request ${body.orderNumber || ""} was created for ${requestPatient.firstName} ${requestPatient.lastName}.`,
       });
-      setRequestDialogOpen(false);
-      setSelectedTests([]);
+      if (generation === requestDialogGeneration.current) {
+        setRequestDialogOpen(false);
+        setSelectedTests([]);
+      }
       setSuccess({
         patientNumber: requestPatient.patientNumber,
         orderNumber: body.orderNumber || "",
@@ -321,6 +331,13 @@ export function PatientsPage() {
               </div>
               <div className="grid gap-6 py-5 lg:grid-cols-[1fr_0.9fr]">
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="space-y-2">
+                      <Label>Referring facility</Label>
+                      <FacilitySelect facilities={facilities} value={facilityId} onChange={setFacilityId} />
+                    </div>
+                    <Field name="clinicianName" label="Referring clinician" />
+                  </div>
                   {patientMode === "existing" ? (
                     <>
                       <ExistingPatientSearch
