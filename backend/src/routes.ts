@@ -120,11 +120,32 @@ api.patch("/facilities/:id", requireRole("admin"), asyncRoute(async (req, res) =
 }));
 
 api.get("/investigations", asyncRoute(async (req, res) => {
-  const rows = await db.query.investigations.findMany({
-    where: req.query.facilityId ? eq(investigations.facilityId, String(req.query.facilityId)) : undefined,
-    orderBy: asc(investigations.name),
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
+  const where = and(
+    req.query.facilityId ? eq(investigations.facilityId, String(req.query.facilityId)) : undefined,
+    search ? or(
+      ilike(investigations.name, `%${search}%`),
+      ilike(investigations.gdrgCode, `%${search}%`),
+      ilike(investigations.specimenType, `%${search}%`),
+    ) : undefined,
+  );
+  const [rows, countRows] = await Promise.all([
+    db.select().from(investigations)
+      .where(where)
+      .orderBy(asc(investigations.name))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(investigations).where(where),
+  ]);
+  res.json({
+    data: rows,
+    page,
+    pageSize,
+    total: Number(countRows[0]?.count || 0),
   });
-  res.json(rows);
 }));
 
 api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) => {

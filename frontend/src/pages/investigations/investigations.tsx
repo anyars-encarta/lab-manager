@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
+import { DataTablePagination } from "@/components/refine-ui/data-table/data-table-pagination";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -66,6 +67,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     referenceHigh: "",
   });
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [testDialogOpen, setTestDialogOpen] = useState(false);
@@ -91,11 +95,17 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     setLoading(true);
     setLoadError("");
     try {
-      const investigationResponse = await fetch(`${API_URL}/api/investigations`, { credentials: "include" });
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (search.trim()) params.set("search", search.trim());
+      const investigationResponse = await fetch(`${API_URL}/api/investigations?${params}`, { credentials: "include" });
       if (!investigationResponse.ok) throw new Error("Unable to load investigation setup");
       const investigationData = await investigationResponse.json();
       if (generation !== requestGeneration.current) return;
-      setInvestigations(Array.isArray(investigationData) ? investigationData : []);
+      setInvestigations(Array.isArray(investigationData.data) ? investigationData.data : []);
+      setTotal(Number(investigationData.total || 0));
       if (selectedTestId) await loadParameters(selectedTestId, generation);
     } catch (error) {
       if (generation === requestGeneration.current) setLoadError(error instanceof Error ? error.message : "Unable to load investigations");
@@ -123,6 +133,18 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   };
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      if (page !== 1) setPage(1);
+      else void load();
+    }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
+    void load();
+  }, [page, pageSize]);
 
   useEffect(() => {
     ++parameterLoadGeneration.current;
@@ -303,9 +325,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
     }
   };
 
-  const filtered = investigations.filter((test) =>
-    `${test.gdrgCode || ""} ${test.name}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = investigations;
   const selectedTest = investigations.find((test) => test.id === selectedTestId);
 
   return (
@@ -352,6 +372,19 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                 </Table>
               )}
             </CardContent>
+            <div className="border-t px-4 py-3">
+              <DataTablePagination
+                currentPage={page}
+                pageCount={Math.max(1, Math.ceil(total / pageSize))}
+                setCurrentPage={setPage}
+                pageSize={pageSize}
+                setPageSize={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+                total={total}
+              />
+            </div>
           </Card>
         </TabsContent>
         <TabsContent value="parameters">
