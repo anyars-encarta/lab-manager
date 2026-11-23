@@ -274,14 +274,6 @@ async function seed() {
       where: eq(investigations.code, code),
     });
     if (existing) {
-      const legacyPrice = existing.price ?? "0";
-      await db.update(investigations).set({
-        coveredTariff: existing.covered ? legacyPrice : "0.00",
-        uncoveredTariff: existing.covered ? "0.00" : legacyPrice,
-        topUp: "0.00",
-        category: "investigation",
-        active: existing.active,
-      }).where(eq(investigations.id, existing.id));
       existingCount += 1;
       continue;
     }

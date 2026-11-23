@@ -56,6 +56,7 @@ type ReferenceProfile = {
 
 export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean }) {
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
+  const [investigationOptions, setInvestigationOptions] = useState<Investigation[]>([]);
   const [parameters, setParameters] = useState<Parameter[]>([]);
   const [referenceProfiles, setReferenceProfiles] = useState<ReferenceProfile[]>([]);
   const [profileDraft, setProfileDraft] = useState({
@@ -106,6 +107,15 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       if (generation !== requestGeneration.current) return;
       setInvestigations(Array.isArray(investigationData.data) ? investigationData.data : []);
       setTotal(Number(investigationData.total || 0));
+      if (search.trim() === "") {
+        setInvestigationOptions((current) => {
+          const pageRows = Array.isArray(investigationData.data) ? investigationData.data : [];
+          const selected = pageRows.find((row: Investigation) => row.id === selectedTestIdRef.current);
+          return selected
+            ? Array.from(new Map([...current, ...pageRows].map((row: Investigation) => [row.id, row])).values())
+            : pageRows;
+        });
+      }
       if (selectedTestId) await loadParameters(selectedTestId, generation);
     } catch (error) {
       if (generation === requestGeneration.current) setLoadError(error instanceof Error ? error.message : "Unable to load investigations");
@@ -135,10 +145,17 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   useEffect(() => { void load(); }, []);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      if (page !== 1) setPage(1);
-      else void load();
-    }, 300);
+    void fetch(`${API_URL}/api/investigations?page=1&pageSize=1000`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load investigation options");
+        const data = await response.json();
+        setInvestigationOptions(Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : []);
+      })
+      .catch(() => setInvestigationOptions((current) => current));
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setPage(1), 300);
     return () => window.clearTimeout(timeout);
   }, [search]);
 
@@ -394,9 +411,10 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                 <div><CardTitle className="text-base">Investigation parameters</CardTitle><CardDescription>Configure reference bounds for H/L result flags.</CardDescription></div>
                 <div className="flex gap-2">
                   <InvestigationSelect
-                    investigations={investigations}
+                    investigations={investigationOptions.length ? investigationOptions : investigations}
                     value={selectedTestId}
                     onChange={(investigationId) => {
+                      if (investigationId === selectedTestIdRef.current) return;
                       selectedTestIdRef.current = investigationId;
                       ++parameterLoadGeneration.current;
                       setParameters([]);

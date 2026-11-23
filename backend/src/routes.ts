@@ -297,7 +297,7 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
     return res.status(400).json({ error: "Reference low value cannot exceed reference high value" });
   }
   const parameterId = String(req.params.id);
-  const transactionResult = await db.transaction(async (tx) => {
+  const transactionResult = await db.transaction(async (tx): Promise<"overlap" | Array<typeof parameterReferenceRanges.$inferSelect>> => {
     await tx.execute(sql`select "id" from "parameters" where "id" = ${parameterId} for update`);
     const ranges = await tx.select().from(parameterReferenceRanges)
       .where(eq(parameterReferenceRanges.parameterId, parameterId));
@@ -309,7 +309,7 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
       genderOverlaps(range.gender, body.gender) &&
       ageOverlaps(range.ageMin, range.ageMax, body.ageMin, body.ageMax ?? null)
     );
-    if (ambiguous) return null;
+    if (ambiguous) return "overlap";
     return tx.insert(parameterReferenceRanges).values({
       parameterId,
       gender: body.gender,
@@ -321,7 +321,7 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
       sortOrder: body.sortOrder,
     }).returning();
   });
-  if (!transactionResult) {
+  if (transactionResult === "overlap") {
     return res.status(409).json({ error: "Overlapping reference profile has the same priority" });
   }
   const [created] = transactionResult;
@@ -343,26 +343,27 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
     referenceLow: body.referenceLow === undefined ? undefined : body.referenceLow?.toString() ?? null,
     referenceHigh: body.referenceHigh === undefined ? undefined : body.referenceHigh?.toString() ?? null,
   };
-  const existing = await db.query.parameterReferenceRanges.findFirst({
-    where: eq(parameterReferenceRanges.id, String(req.params.id)),
-  });
-  if (!existing) return res.status(404).json({ error: "Reference range not found" });
-  const effective = {
-    gender: body.gender ?? existing.gender,
-    ageMin: body.ageMin ?? existing.ageMin,
-    ageMax: body.ageMax === undefined ? existing.ageMax : body.ageMax,
-    referenceLow: body.referenceLow === undefined ? existing.referenceLow : body.referenceLow,
-    referenceHigh: body.referenceHigh === undefined ? existing.referenceHigh : body.referenceHigh,
-    sortOrder: body.sortOrder ?? existing.sortOrder,
-  };
-  if (effective.ageMax !== null && effective.ageMax < effective.ageMin) {
-    return res.status(400).json({ error: "Maximum age must be greater than or equal to minimum age" });
-  }
-  if (effective.referenceLow != null && effective.referenceHigh != null &&
-      Number(effective.referenceLow) > Number(effective.referenceHigh)) {
-    return res.status(400).json({ error: "Reference low cannot exceed reference high" });
-  }
-  const transactionResult = await db.transaction(async (tx) => {
+  const transactionResult = await db.transaction(async (tx): Promise<"not-found" | "invalid-age" | "invalid-bounds" | "overlap" | Array<typeof parameterReferenceRanges.$inferSelect>> => {
+    await tx.execute(sql`select "id" from "parameter_reference_ranges" where "id" = ${String(req.params.id)} for update`);
+    const existing = await tx.query.parameterReferenceRanges.findFirst({
+      where: eq(parameterReferenceRanges.id, String(req.params.id)),
+    });
+    if (!existing) return "not-found";
+    const effective = {
+      gender: body.gender ?? existing.gender,
+      ageMin: body.ageMin ?? existing.ageMin,
+      ageMax: body.ageMax === undefined ? existing.ageMax : body.ageMax,
+      referenceLow: body.referenceLow === undefined ? existing.referenceLow : body.referenceLow,
+      referenceHigh: body.referenceHigh === undefined ? existing.referenceHigh : body.referenceHigh,
+      sortOrder: body.sortOrder ?? existing.sortOrder,
+    };
+    if (effective.ageMax !== null && effective.ageMax < effective.ageMin) {
+      return "invalid-age";
+    }
+    if (effective.referenceLow != null && effective.referenceHigh != null &&
+        Number(effective.referenceLow) > Number(effective.referenceHigh)) {
+      return "invalid-bounds";
+    }
     await tx.execute(sql`select "id" from "parameters" where "id" = ${existing.parameterId} for update`);
     const ranges = await tx.select().from(parameterReferenceRanges)
       .where(eq(parameterReferenceRanges.parameterId, existing.parameterId));
@@ -375,11 +376,11 @@ api.patch("/parameter-reference-ranges/:id", requireRole("admin"), asyncRoute(as
       genderOverlaps(range.gender, effective.gender) &&
       ageOverlaps(range.ageMin, range.ageMax, effective.ageMin, effective.ageMax)
     );
-    if (ambiguous) return null;
+    if (ambiguous) return "overlap";
     return tx.update(parameterReferenceRanges).set(values)
       .where(eq(parameterReferenceRanges.id, String(req.params.id))).returning();
   });
-  if (!transactionResult) {
+  if (transactionResult === "overlap") {
     return res.status(409).json({ error: "Overlapping reference profile has the same priority" });
   }
   const [updated] = transactionResult;
@@ -398,6 +399,7 @@ api.get("/patients", asyncRoute(async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
   const rows = search
     ? await db.select().from(patients).where(or(
+        ilike(sql<string>`concat(${patients.firstName}, ' ', ${patients.lastName})`, `%${search}%`),
         ilike(patients.firstName, `%${search}%`),
         ilike(patients.lastName, `%${search}%`),
         ilike(patients.patientNumber, `%${search}%`),

@@ -460,7 +460,15 @@ export function PatientsPage() {
         </div>
       )}
 
-      <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
+      <Dialog open={requestDialogOpen} onOpenChange={(open) => {
+        requestDialogGeneration.current += 1;
+        setRequestDialogOpen(open);
+        if (!open) {
+          setSelectedTests([]);
+          setInvestigationSearch("");
+          setError("");
+        }
+      }}>
         <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-2xl">
           <form onSubmit={submitExistingRequest} className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="shrink-0 px-6 pt-6">
@@ -514,7 +522,13 @@ export function PatientsPage() {
             </div>
             {error && <p className="mx-6 mb-4 shrink-0 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
             <DialogFooter className="shrink-0 border-t px-6 py-4">
-              <Button type="button" variant="outline" onClick={() => setRequestDialogOpen(false)}>Cancel</Button>
+              <Button type="button" variant="outline" onClick={() => {
+                requestDialogGeneration.current += 1;
+                setRequestDialogOpen(false);
+                setSelectedTests([]);
+                setInvestigationSearch("");
+                setError("");
+              }}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving ? "Creating request..." : "Create laboratory request"}</Button>
             </DialogFooter>
           </form>
