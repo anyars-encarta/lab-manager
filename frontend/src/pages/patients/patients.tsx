@@ -507,8 +507,12 @@ export function PatientsPage() {
         <Dialog
           open={dialogOpen}
           onOpenChange={(open) => {
-            if (open) setError("");
-            else closeRegistrationDialog();
+            if (open) {
+              setDialogOpen(true);
+              setError("");
+            } else {
+              closeRegistrationDialog();
+            }
           }}
         >
           <DialogTrigger asChild>
