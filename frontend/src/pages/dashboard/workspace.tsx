@@ -109,6 +109,7 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [editingUser, setEditingUser] = useState<any>(null);
   const [userImage, setUserImage] = useState("");
   const [uploadingUserImage, setUploadingUserImage] = useState(false);
+  const userUploadSession = useRef(0);
   const [paymentOrder, setPaymentOrder] = useState<any>(null);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -226,7 +227,13 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const invalidateUserUploadSession = () => {
+    userUploadSession.current += 1;
+    setUploadingUserImage(false);
+  };
+
   useEffect(() => {
+    invalidateUserUploadSession();
     setRows([]);
     setLoadError("");
     setSubmissionError("");
@@ -241,6 +248,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       toast.error("Please select a PNG or JPEG image");
       return;
     }
+    const session = ++userUploadSession.current;
     setUploadingUserImage(true);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -249,27 +257,38 @@ export function LaboratoryWorkspace({ section }: Props) {
         reader.onerror = () => reject(new Error("Unable to read image"));
         reader.readAsDataURL(file);
       });
+      if (session !== userUploadSession.current) return;
       const response = await fetch(`${API_URL}/api/users/image`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dataUrl, fileName: file.name }),
       });
+      if (session !== userUploadSession.current) return;
       const result = await response.json().catch(() => null);
+      if (session !== userUploadSession.current) return;
       if (!response.ok || !result?.secureUrl) {
         throw new Error(result?.error || "Unable to upload image");
       }
       setUserImage(result.secureUrl);
       toast.success("Image uploaded");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to upload image");
+      if (session === userUploadSession.current) {
+        toast.error(error instanceof Error ? error.message : "Unable to upload image");
+      }
     } finally {
-      setUploadingUserImage(false);
+      if (session === userUploadSession.current) {
+        setUploadingUserImage(false);
+      }
     }
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (section === "users" && uploadingUserImage) {
+      toast.error("Please wait for the image upload to finish");
+      return;
+    }
     setSaving(true);
     setMessage("");
     setSubmissionError("");
@@ -397,7 +416,10 @@ export function LaboratoryWorkspace({ section }: Props) {
         );
       }
       setMessage("Saved successfully");
-      if (section === "users") setEditingUser(null);
+      if (section === "users") {
+        setEditingUser(null);
+        invalidateUserUploadSession();
+      }
       setDialogOpen(false);
       await load();
     } catch (error) {
@@ -601,12 +623,14 @@ export function LaboratoryWorkspace({ section }: Props) {
             <Dialog open={dialogOpen} onOpenChange={(open) => {
               setDialogOpen(open);
               if (!open) {
+                invalidateUserUploadSession();
                 setEditingUser(null);
                 setUserImage("");
               }
             }}>
               <DialogTrigger asChild>
                 <Button className="gap-2 cursor-pointer" onClick={() => {
+                  invalidateUserUploadSession();
                   setEditingUser(null);
                   setUserImage("");
                 }}>
@@ -788,12 +812,19 @@ export function LaboratoryWorkspace({ section }: Props) {
                       type="button"
                       variant="outline"
                       className="cursor-pointer"
-                      onClick={() => setDialogOpen(false)}
+                      onClick={() => {
+                        invalidateUserUploadSession();
+                        setDialogOpen(false);
+                      }}
                     >
                       Cancel
                     </Button>
-                    <Button type="submit" disabled={saving} className="cursor-pointer">
-                      {saving ? "Saving..." : "Save"}
+                    <Button type="submit" disabled={saving || (section === "users" && uploadingUserImage)} className="cursor-pointer">
+                      {section === "users" && uploadingUserImage
+                        ? "Uploading..."
+                        : saving
+                          ? "Saving..."
+                          : "Save"}
                     </Button>
                   </DialogFooter>
                 </form>
@@ -853,6 +884,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                 canReceivePayment={role === "admin" || role === "account"}
                 onReceivePayment={(order) => void openPayment(order)}
                 onEditUser={(user) => {
+                  invalidateUserUploadSession();
                   setEditingUser(user);
                   setUserImage(user.image || "");
                   setDialogOpen(true);

@@ -116,7 +116,7 @@ api.post("/users", requireRole("admin"), asyncRoute(async (req, res) => {
     email: z.email(),
     password: z.string().min(8),
     role: z.enum(["admin", "frontdesk", "account", "technician", "doctor"]),
-    image: z.string().optional(),
+    image: z.string().nullable().optional(),
   }).parse(req.body);
 
   const created = await auth.api.signUpEmail({
@@ -179,11 +179,24 @@ api.post("/users/image", asyncRoute(async (req, res) => {
   if (buffer.length > 5 * 1024 * 1024) {
     return res.status(400).json({ error: "Image must be 5 MB or smaller" });
   }
+  const isPng = buffer.length >= 24
+    && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    && buffer.subarray(12, 16).toString("ascii") === "IHDR";
+  const isJpeg = buffer.length >= 4
+    && buffer[0] === 0xff
+    && buffer[1] === 0xd8
+    && buffer[2] === 0xff
+    && buffer[buffer.length - 2] === 0xff
+    && buffer[buffer.length - 1] === 0xd9;
+  const decodedMime = isPng ? "image/png" : isJpeg ? "image/jpeg" : null;
+  if (decodedMime !== match[1]) {
+    return res.status(400).json({ error: "Image data must be a valid PNG or JPEG" });
+  }
 
   const timestamp = Math.floor(Date.now() / 1000);
   const folder = "lab-manager/user-images";
   const signature = createHash("sha1")
-    .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
+    .update(`allowed_formats=jpg,png&folder=${folder}&timestamp=${timestamp}${apiSecret}`)
     .digest("hex");
   const uploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim()
     || `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
@@ -193,6 +206,7 @@ api.post("/users/image", asyncRoute(async (req, res) => {
   uploadData.append("timestamp", String(timestamp));
   uploadData.append("signature", signature);
   uploadData.append("folder", folder);
+  uploadData.append("allowed_formats", "jpg,png");
 
   const uploadResponse = await fetchWithTimeout(uploadUrl, { method: "POST", body: uploadData });
   const uploaded = await uploadResponse.json().catch(() => null) as {
