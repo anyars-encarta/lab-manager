@@ -193,8 +193,6 @@ export function ReferringFacilitiesPage() {
           </DialogTrigger>
           <DialogContent 
           className="max-h-[92vh] overflow-y-auto sm:max-w-xl"
-          onInteractOutside={(event) => event.preventDefault()}
-          onEscapeKeyDown={(event) => event.preventDefault()}
           >
             <form onSubmit={submit}>
               <DialogHeader>

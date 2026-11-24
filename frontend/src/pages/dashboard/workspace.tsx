@@ -107,7 +107,10 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
-  const [paystackReference, setPaystackReference] = useState("");
+  const [paystackReference, setPaystackReference] = useState<{
+    orderId: string;
+    reference: string;
+  } | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const requestGeneration = useRef(0);
@@ -386,7 +389,7 @@ export function LaboratoryWorkspace({ section }: Props) {
     setPaymentMethod("cash");
     setPaymentAmount(outstanding.toFixed(2));
     setPaymentReference("");
-    setPaystackReference("");
+    setPaystackReference(null);
     setPaymentError("");
   };
 
@@ -416,7 +419,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       const payment = await response.json().catch(() => null);
       if (!response.ok)
         throw new Error(payment?.error || "Unable to receive payment");
-      setPaystackReference("");
+      setPaystackReference(null);
       toast.success("Payment received", {
         description: `Receipt ${payment.receiptNumber} was created.`,
       });
@@ -453,8 +456,8 @@ export function LaboratoryWorkspace({ section }: Props) {
       await recordPayment();
       return;
     }
-    if (paystackReference) {
-      await recordPayment(paystackReference);
+    if (paystackReference && paystackReference.orderId === paymentOrder.id) {
+      await recordPayment(paystackReference.reference);
       return;
     }
     try {
@@ -496,7 +499,10 @@ export function LaboratoryWorkspace({ section }: Props) {
             return;
           }
           const retainedReference = String(reference);
-          setPaystackReference(retainedReference);
+          setPaystackReference({
+            orderId: paymentOrder.id,
+            reference: retainedReference,
+          });
           void recordPayment(retainedReference);
         },
         onClose: () => toast.info("Paystack checkout closed"),
@@ -764,7 +770,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         onOpenChange={(open) => {
           if (!open && !paymentSaving) {
             setPaymentOrder(null);
-            setPaystackReference("");
+            setPaystackReference(null);
           }
         }}
       >
@@ -792,7 +798,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                 value={paymentMethod}
                 onValueChange={(value) => {
                   setPaymentMethod(value);
-                  setPaystackReference("");
+                  setPaystackReference(null);
                 }}
               >
                 <SelectTrigger>
@@ -819,7 +825,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                 value={paymentAmount}
                 onChange={(event) => {
                   setPaymentAmount(event.target.value);
-                  setPaystackReference("");
+                  setPaystackReference(null);
                 }}
               />
             </div>
@@ -846,7 +852,7 @@ export function LaboratoryWorkspace({ section }: Props) {
               className="cursor-pointer"
               onClick={() => {
                 setPaymentOrder(null);
-                setPaystackReference("");
+                setPaystackReference(null);
               }}
               disabled={paymentSaving}
             >

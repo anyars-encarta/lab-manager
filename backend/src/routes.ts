@@ -244,14 +244,14 @@ api.post("/laboratory-profile/logo", requireRole("admin"), asyncRoute(async (req
 
 api.put("/laboratory-profile", requireRole("admin"), asyncRoute(async (req, res) => {
   let uploadHost: string | null = null;
-  const configuredUploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim();
-  if (configuredUploadUrl) {
-    try {
-      const parsed = new URL(configuredUploadUrl);
-      if (parsed.protocol === "https:") uploadHost = parsed.host.toLowerCase();
-    } catch {
-      uploadHost = null;
-    }
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const effectiveUploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim()
+    || (cloudName ? `https://api.cloudinary.com/v1_1/${cloudName}/image/upload` : "");
+  try {
+    const parsed = new URL(effectiveUploadUrl);
+    if (parsed.protocol === "https:") uploadHost = parsed.host.toLowerCase();
+  } catch {
+    uploadHost = null;
   }
   const logoUrlSchema = z.union([
     z.literal(""),
@@ -760,11 +760,19 @@ api.post("/orders/:id/payments", requireRole("admin", "account"), asyncRoute(asy
     );
     const verifyBody = await verifyResponse.json().catch(() => null) as {
       status?: boolean;
-      data?: { status?: string; amount?: number; currency?: string };
+      data?: {
+        status?: string;
+        amount?: number;
+        currency?: string;
+        metadata?: { orderId?: string } | null;
+      };
     } | null;
     const verifiedAmount = numberValue(verifyBody?.data?.amount) / 100;
     if (!verifyResponse.ok || !verifyBody?.status || verifyBody.data?.status !== "success") {
       return res.status(400).json({ error: "Paystack payment could not be verified" });
+    }
+    if (verifyBody.data?.metadata?.orderId !== order.id) {
+      return res.status(400).json({ error: "Verified Paystack payment does not belong to this order" });
     }
     const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
     const expectedCurrency = (profile?.currency || "GHS").toUpperCase();
@@ -839,7 +847,7 @@ api.get("/payments/:id/receipt", asyncRoute(async (req, res) => {
   if (profile?.logoUrl) {
     try {
       const logo = await readLimitedImage(profile.logoUrl);
-      pdf.image(logo, 0, pdf.y, {
+      pdf.image(logo, (pdf.page.width - 44) / 2, pdf.y, {
         fit: [44, 44],
         align: "center",
         valign: "center",
@@ -1014,7 +1022,7 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   if (profile?.logoUrl) {
     try {
       const logo = await readLimitedImage(profile.logoUrl);
-      pdf.image(logo, 0, pdf.y, {
+      pdf.image(logo, (pdf.page.width - 64) / 2, pdf.y, {
         fit: [64, 64],
         align: "center",
         valign: "center",
