@@ -537,7 +537,11 @@ export function PatientsPage() {
               New patient / request
             </Button>
           </DialogTrigger>
-          <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-3xl">
+          <DialogContent 
+          className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-3xl"
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          >
             <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
               <DialogHeader className="shrink-0 px-6 pt-6">
                 <DialogTitle>
@@ -800,7 +804,11 @@ export function PatientsPage() {
           }
         }}
       >
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-2xl">
+        <DialogContent 
+        className="flex max-h-[88vh] flex-col overflow-hidden p-0 sm:max-w-2xl"
+        onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <form
             onSubmit={submitExistingRequest}
             className="flex min-h-0 flex-1 flex-col"

@@ -187,11 +187,13 @@ export function ReferringFacilitiesPage() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="gap-2" onClick={openCreate}>
+            <Button className="gap-2 cursor-pointer" onClick={openCreate}>
               <Plus className="h-4 w-4" />Add facility
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
+          <DialogContent 
+          className="max-h-[92vh] overflow-y-auto sm:max-w-xl"
+          >
             <form onSubmit={submit}>
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit referring facility" : "Add referring facility"}</DialogTitle>
@@ -215,8 +217,8 @@ export function ReferringFacilitiesPage() {
                 </p>
               )}
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save facility"}</Button>
+                <Button type="button" variant="outline" className="cursor-pointer"onClick={() => setDialogOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={saving} className="cursor-pointer">{saving ? "Saving..." : "Save facility"}</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -272,7 +274,7 @@ export function ReferringFacilitiesPage() {
                     <TableCell>{facility.nhiaFacilityCode || "—"}</TableCell>
                     <TableCell>{facility.email || "—"}</TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(facility)} aria-label={`Edit ${facility.name}`}>
+                      <Button size="sm" variant="ghost" className="cursor-pointer" onClick={() => openEdit(facility)} aria-label={`Edit ${facility.name}`}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                     </TableCell>

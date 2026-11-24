@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import {
   facilities,
   investigations,
   labOrders,
+  laboratoryProfiles,
   nhiaClaims,
   orderItems,
   parameters,
@@ -46,6 +48,53 @@ const calendarAge = (birthDate: Date, at: Date = new Date()) => {
 const prefixNumber = (prefix: string) => {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   return `${prefix}-${date}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+};
+
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit,
+  timeoutMs = 10_000,
+) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const readLimitedImage = async (url: string, maxBytes = 5 * 1024 * 1024) => {
+  const response = await fetchWithTimeout(url, { redirect: "manual" });
+  if (!response.ok || response.status >= 300 && response.status < 400) {
+    throw new Error("Logo URL returned an invalid response");
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number.isFinite(Number(contentLength)) && Number(contentLength) > maxBytes) {
+    throw new Error("Logo exceeds the size limit");
+  }
+  if (!response.body) throw new Error("Logo response has no body");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("Logo exceeds the size limit");
+    }
+    chunks.push(value);
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return Buffer.from(result);
 };
 
 api.get("/me", (req, res) => res.json({ user: req.appUser }));
@@ -138,6 +187,112 @@ api.patch("/facilities/:id", requireRole("admin"), asyncRoute(async (req, res) =
   const [updated] = await db.update(facilities).set(body).where(eq(facilities.id, id)).returning();
   if (!updated) return res.status(404).json({ error: "Facility not found" });
   res.json(updated);
+}));
+
+api.get("/laboratory-profile", asyncRoute(async (_req, res) => {
+  const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+  res.json(profile || null);
+}));
+
+api.post("/laboratory-profile/logo", requireRole("admin"), asyncRoute(async (req, res) => {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+  const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+  if (!cloudName || !apiKey || !apiSecret) {
+    return res.status(503).json({ error: "Cloudinary is not configured" });
+  }
+
+  const body = z.object({
+    dataUrl: z.string(),
+    fileName: z.string().optional(),
+  }).parse(req.body);
+  const match = body.dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
+  if (!match) return res.status(400).json({ error: "Invalid image data" });
+
+  const mimeType = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: "Logo must be 5 MB or smaller" });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = "lab-manager/laboratory-logos";
+  const signature = createHash("sha1")
+    .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
+    .digest("hex");
+  const uploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim()
+    || `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+
+  const uploadData = new FormData();
+  uploadData.append("file", new Blob([buffer], { type: mimeType }), body.fileName || "laboratory-logo");
+  uploadData.append("api_key", apiKey);
+  uploadData.append("timestamp", String(timestamp));
+  uploadData.append("signature", signature);
+  uploadData.append("folder", folder);
+
+  const uploadResponse = await fetchWithTimeout(uploadUrl, { method: "POST", body: uploadData });
+  const uploaded = await uploadResponse.json().catch(() => null) as {
+    secure_url?: string;
+    error?: { message?: string };
+  } | null;
+  if (!uploadResponse.ok || !uploaded?.secure_url) {
+    return res.status(502).json({ error: uploaded?.error?.message || "Unable to upload logo" });
+  }
+
+  res.json({ secureUrl: uploaded.secure_url });
+}));
+
+api.put("/laboratory-profile", requireRole("admin"), asyncRoute(async (req, res) => {
+  let uploadHost: string | null = null;
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const effectiveUploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim()
+    || (cloudName ? `https://api.cloudinary.com/v1_1/${cloudName}/image/upload` : "");
+  try {
+    const parsed = new URL(effectiveUploadUrl);
+    if (parsed.protocol === "https:") uploadHost = parsed.host.toLowerCase();
+  } catch {
+    uploadHost = null;
+  }
+  const logoUrlSchema = z.union([
+    z.literal(""),
+    z.literal(null),
+    z.string().refine((value) => {
+      try {
+        const url = new URL(value);
+        if (url.protocol !== "https:" || uploadHost === null) return false;
+        const allowedHosts = new Set([uploadHost]);
+        if (uploadHost.startsWith("api.")) {
+          allowedHosts.add(uploadHost.replace(/^api\./, "res."));
+        }
+        return allowedHosts.has(url.host.toLowerCase());
+      } catch {
+        return false;
+      }
+    }, "Logo URL must be an HTTPS URL hosted by the configured Cloudinary upload host"),
+  ]).optional();
+  const body = z.object({
+    name: z.string().min(2),
+    logoUrl: logoUrlSchema,
+    address: z.string().nullable().optional(),
+    phone: z.string().nullable().optional(),
+    email: z.union([z.email(), z.literal("")]).nullable().optional(),
+    slogan: z.string().nullable().optional(),
+    currency: z.string().min(3).max(10).optional(),
+  }).parse(req.body);
+  const values = {
+    name: body.name,
+    logoUrl: body.logoUrl || null,
+    address: body.address || null,
+    phone: body.phone || null,
+    email: body.email || null,
+    slogan: body.slogan || null,
+    currency: body.currency || "GHS",
+  };
+  const existing = (await db.select().from(laboratoryProfiles).limit(1))[0];
+  const [saved] = existing
+    ? await db.update(laboratoryProfiles).set(values).where(eq(laboratoryProfiles.id, existing.id)).returning()
+    : await db.insert(laboratoryProfiles).values(values).returning();
+  res.json(saved);
 }));
 
 api.get("/investigations", asyncRoute(async (req, res) => {
@@ -581,6 +736,12 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
   res.json({ ...order, patient, items });
 }));
 
+api.get("/payments/paystack/config", requireRole("admin", "account"), asyncRoute(async (_req, res) => {
+  res.json({
+    publicKey: process.env.PAYSTACK_PUBLIC_KEY || "",
+  });
+}));
+
 api.post("/orders/:id/payments", requireRole("admin", "account"), asyncRoute(async (req, res) => {
   const body = z.object({
     amount: z.coerce.number().positive(),
@@ -590,24 +751,144 @@ api.post("/orders/:id/payments", requireRole("admin", "account"), asyncRoute(asy
   const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, String(req.params.id)) });
   if (!order) return res.status(404).json({ error: "Order not found" });
 
-  const paid = numberValue(order.paidAmount);
-  const total = numberValue(order.totalAmount);
-  if (paid + body.amount > total) return res.status(400).json({ error: "Payment exceeds outstanding balance" });
-  const newPaid = paid + body.amount;
-  const [payment] = await db.insert(payments).values({
-    receiptNumber: prefixNumber("RCP"),
-    orderId: order.id,
-    amount: body.amount.toFixed(2),
-    method: body.method,
-    reference: body.reference,
-    receivedBy: req.appUser!.id,
-  }).returning();
-  await db.update(labOrders).set({
-    paidAmount: newPaid.toFixed(2),
-    paymentStatus: newPaid >= total ? "paid" : "partial",
-    status: newPaid >= total ? "processing" : "awaiting_payment",
-  }).where(eq(labOrders.id, order.id));
-  res.status(201).json(payment);
+  if (body.method === "mobile_money") {
+    if (!body.reference) return res.status(400).json({ error: "Paystack payment reference is required" });
+    if (!process.env.PAYSTACK_SECRET_KEY) return res.status(500).json({ error: "Paystack is not configured" });
+    const verifyResponse = await fetchWithTimeout(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(body.reference)}`,
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } },
+    );
+    const verifyBody = await verifyResponse.json().catch(() => null) as {
+      status?: boolean;
+      data?: {
+        status?: string;
+        amount?: number;
+        currency?: string;
+        metadata?: { orderId?: string } | null;
+      };
+    } | null;
+    const verifiedAmount = numberValue(verifyBody?.data?.amount) / 100;
+    if (!verifyResponse.ok || !verifyBody?.status || verifyBody.data?.status !== "success") {
+      return res.status(400).json({ error: "Paystack payment could not be verified" });
+    }
+    if (verifyBody.data?.metadata?.orderId !== order.id) {
+      return res.status(400).json({ error: "Verified Paystack payment does not belong to this order" });
+    }
+    const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+    const expectedCurrency = (profile?.currency || "GHS").toUpperCase();
+    if (!verifyBody.data?.currency ||
+        verifyBody.data.currency.toUpperCase() !== expectedCurrency) {
+      return res.status(400).json({ error: "Verified Paystack currency does not match the order currency" });
+    }
+    if (Math.abs(verifiedAmount - body.amount) > 0.001) {
+      return res.status(400).json({ error: "Verified Paystack amount does not match the payment" });
+    }
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx.select().from(labOrders)
+        .where(eq(labOrders.id, order.id))
+        .for("update");
+      if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+
+      const paid = numberValue(lockedOrder.paidAmount);
+      const total = numberValue(lockedOrder.totalAmount);
+      if (paid + body.amount > total) {
+        throw Object.assign(new Error("Payment exceeds outstanding balance"), { statusCode: 400 });
+      }
+      const newPaid = paid + body.amount;
+      const [payment] = await tx.insert(payments).values({
+        receiptNumber: prefixNumber("RCP"),
+        orderId: lockedOrder.id,
+        amount: body.amount.toFixed(2),
+        method: body.method,
+        reference: body.reference,
+        receivedBy: req.appUser!.id,
+      }).returning();
+      await tx.update(labOrders).set({
+        paidAmount: newPaid.toFixed(2),
+        paymentStatus: newPaid >= total ? "paid" : "partial",
+        status: newPaid >= total ? "processing" : "awaiting_payment",
+      }).where(eq(labOrders.id, lockedOrder.id));
+      return payment;
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error &&
+        (error as { code?: string }).code === "23505") {
+      return res.status(409).json({ error: "This payment reference has already been received" });
+    }
+    if (error && typeof error === "object" && "cause" in error) {
+      const cause = (error as { cause?: { code?: string } }).cause;
+      if (cause?.code === "23505") return res.status(409).json({ error: "This payment reference has already been received" });
+    }
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
+    }
+    throw error;
+  }
+}));
+
+api.get("/payments/:id/receipt", asyncRoute(async (req, res) => {
+  const payment = await db.query.payments.findFirst({ where: eq(payments.id, String(req.params.id)) });
+  if (!payment) return res.status(404).json({ error: "Payment not found" });
+  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, payment.orderId) });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  const patient = await db.query.patients.findFirst({ where: eq(patients.id, order.patientId) });
+  const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+  const receiver = await db.query.users.findFirst({ where: eq(users.id, payment.receivedBy) });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${payment.receiptNumber}.pdf"`);
+  const pdf = new PDFDocument({ size: [226.77, 600], margin: 18 });
+  pdf.pipe(res);
+  if (profile?.logoUrl) {
+    try {
+      const logo = await readLimitedImage(profile.logoUrl);
+      pdf.image(logo, (pdf.page.width - 44) / 2, pdf.y, {
+        fit: [44, 44],
+        align: "center",
+        valign: "center",
+      });
+      pdf.moveDown(2);
+    } catch {
+      // Receipt printing should continue when a remote logo is unavailable.
+    }
+  }
+  pdf.fontSize(14).text(profile?.name || "Laboratory", { align: "center" });
+  if (profile?.address) pdf.fontSize(8).text(profile.address, { align: "center" });
+  if (profile?.phone) pdf.fontSize(8).text(profile.phone, { align: "center" });
+  if (profile?.email) pdf.fontSize(8).text(profile.email, { align: "center" });
+  if (profile?.slogan) pdf.fontSize(9).text(profile.slogan, { align: "center", oblique: true });
+  pdf.moveDown();
+  pdf.fontSize(11).text("OFFICIAL PAYMENT RECEIPT", { align: "center", underline: true });
+  pdf.moveDown();
+  pdf.fontSize(9);
+  pdf.text(`Receipt: ${payment.receiptNumber}`);
+  pdf.text(`Order: ${order.orderNumber}`);
+  pdf.text(`Patient: ${patient?.firstName || ""} ${patient?.lastName || ""}`);
+  pdf.text(`Patient ID: ${patient?.patientNumber || ""}`);
+  pdf.text(`Date: ${payment.receivedAt.toLocaleString()}`);
+  pdf.moveDown();
+  pdf.text(`Amount paid: GH${String.fromCharCode(162)} ${numberValue(payment.amount).toFixed(2)}`, { continued: false });
+  pdf.text(`Payment mode: ${payment.method.replace("_", " ").toUpperCase()}`);
+  if (payment.reference) pdf.text(`Reference: ${payment.reference}`);
+  const orderPayments = await db.select().from(payments)
+    .where(eq(payments.orderId, order.id))
+    .orderBy(asc(payments.receivedAt), asc(payments.id));
+  let receivedThroughReceipt = 0;
+  for (const orderPayment of orderPayments) {
+    receivedThroughReceipt += numberValue(orderPayment.amount);
+    if (orderPayment.id === payment.id) break;
+  }
+  pdf.text(`Outstanding: GH${String.fromCharCode(162)} ${Math.max(0, numberValue(order.totalAmount) - receivedThroughReceipt).toFixed(2)}`);
+  pdf.moveDown();
+  pdf.text(`Received by: ${receiver?.name || "Authorized user"}`);
+  pdf.moveDown();
+  pdf.fontSize(8).text("Thank you", { align: "center" });
+  pdf.end();
 }));
 
 api.patch("/orders/:orderId/items/:itemId/status", requireRole("admin", "technician"), asyncRoute(async (req, res) => {
@@ -635,6 +916,15 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
   }).parse(req.body);
   const orderId = String(req.params.orderId);
   const itemId = String(req.params.itemId);
+  const orderItem = await db.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
+  if (!orderItem || orderItem.orderId !== orderId) {
+    return res.status(404).json({ error: "Order item not found" });
+  }
+  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, orderId) });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
+    return res.status(409).json({ error: "Payment must be received in full before results can be captured" });
+  }
   await db.transaction(async (tx) => {
     await tx.delete(resultEntries).where(eq(resultEntries.orderItemId, itemId));
     const orderItem = await tx.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
@@ -707,7 +997,12 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
 }));
 
 api.post("/orders/:id/complete", requireRole("admin", "technician"), asyncRoute(async (req, res) => {
-  const [updated] = await db.update(labOrders).set({ status: "completed" }).where(eq(labOrders.id, String(req.params.id))).returning();
+  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, String(req.params.id)) });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
+    return res.status(409).json({ error: "Payment must be received in full before the report can be completed" });
+  }
+  const [updated] = await db.update(labOrders).set({ status: "completed" }).where(eq(labOrders.id, order.id)).returning();
   if (!updated) return res.status(404).json({ error: "Order not found" });
   res.json(updated);
 }));
@@ -717,15 +1012,29 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   if (!order) return res.status(404).json({ error: "Order not found" });
   if (order.status !== "completed") return res.status(409).json({ error: "Report is available only after completion" });
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, order.patientId) });
-  const facility = await db.query.facilities.findFirst({ where: eq(facilities.id, order.facilityId) });
+  const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${order.orderNumber}.pdf"`);
   const pdf = new PDFDocument({ size: "A4", margin: 50 });
   pdf.pipe(res);
-  pdf.fontSize(18).text(facility?.name || "Laboratory", { align: "center" });
-  pdf.fontSize(10).text(facility?.address || "", { align: "center" });
+  if (profile?.logoUrl) {
+    try {
+      const logo = await readLimitedImage(profile.logoUrl);
+      pdf.image(logo, (pdf.page.width - 64) / 2, pdf.y, {
+        fit: [64, 64],
+        align: "center",
+        valign: "center",
+      });
+      pdf.moveDown(3);
+    } catch {
+      // Report printing should continue when the remote logo is unavailable.
+    }
+  }
+  pdf.fontSize(18).text(profile?.name || "Laboratory", { align: "center" });
+  pdf.fontSize(10).text(profile?.address || "", { align: "center" });
+  if (profile?.phone) pdf.text(profile.phone, { align: "center" });
   pdf.moveDown();
   pdf.fontSize(16).text("Laboratory Test Report", { align: "center" });
   pdf.moveDown();

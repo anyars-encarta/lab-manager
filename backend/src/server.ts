@@ -11,6 +11,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use("/api/auth", toNodeHandler(auth));
+app.use("/api/laboratory-profile/logo", express.json({ limit: "8mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (_req, res) => {

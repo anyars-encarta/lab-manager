@@ -10,6 +10,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -111,6 +112,18 @@ export const facilities = pgTable("facilities", {
   nhiaFacilityCode: varchar("nhia_facility_code", { length: 100 }),
   settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const laboratoryProfiles = pgTable("laboratory_profiles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 200 }).notNull().default("Laboratory"),
+  logoUrl: text("logo_url"),
+  address: text("address"),
+  phone: varchar("phone", { length: 30 }),
+  email: varchar("email", { length: 200 }),
+  slogan: text("slogan"),
+  currency: varchar("currency", { length: 10 }).notNull().default("GHS"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
@@ -242,7 +255,9 @@ export const payments = pgTable("payments", {
   reference: varchar("reference", { length: 100 }),
   receivedBy: text("received_by").notNull().references(() => users.id),
   receivedAt: timestamp("received_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("payments_reference_uidx").on(table.reference),
+]);
 
 export const nhiaClaims = pgTable("nhia_claims", {
   id: uuid("id").primaryKey().defaultRandom(),
