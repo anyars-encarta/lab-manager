@@ -107,6 +107,7 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
+  const [paystackReference, setPaystackReference] = useState("");
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const requestGeneration = useRef(0);
@@ -385,6 +386,7 @@ export function LaboratoryWorkspace({ section }: Props) {
     setPaymentMethod("cash");
     setPaymentAmount(outstanding.toFixed(2));
     setPaymentReference("");
+    setPaystackReference("");
     setPaymentError("");
   };
 
@@ -414,21 +416,27 @@ export function LaboratoryWorkspace({ section }: Props) {
       const payment = await response.json().catch(() => null);
       if (!response.ok)
         throw new Error(payment?.error || "Unable to receive payment");
+      setPaystackReference("");
       toast.success("Payment received", {
         description: `Receipt ${payment.receiptNumber} was created.`,
       });
       setPaymentOrder(null);
       await load();
 
-      const receiptResponse = await fetch(
-        `${API_URL}/api/payments/${payment.id}/receipt`,
-        { credentials: "include" },
-      );
-      if (receiptResponse.ok) {
+      try {
+        const receiptResponse = await fetch(
+          `${API_URL}/api/payments/${payment.id}/receipt`,
+          { credentials: "include" },
+        );
+        if (!receiptResponse.ok) throw new Error("Receipt request failed");
         const blob = await receiptResponse.blob();
         const receiptUrl = URL.createObjectURL(blob);
         window.open(receiptUrl, "_blank", "noopener,noreferrer");
         window.setTimeout(() => URL.revokeObjectURL(receiptUrl), 60_000);
+      } catch {
+        toast.error("Payment received", {
+          description: "The receipt could not be opened.",
+        });
       }
     } catch (error) {
       const message =
@@ -443,6 +451,10 @@ export function LaboratoryWorkspace({ section }: Props) {
   const startPayment = async () => {
     if (paymentMethod !== "mobile_money") {
       await recordPayment();
+      return;
+    }
+    if (paystackReference) {
+      await recordPayment(paystackReference);
       return;
     }
     try {
@@ -483,7 +495,9 @@ export function LaboratoryWorkspace({ section }: Props) {
             setPaymentError("Paystack returned no payment reference.");
             return;
           }
-          void recordPayment(String(reference));
+          const retainedReference = String(reference);
+          setPaystackReference(retainedReference);
+          void recordPayment(retainedReference);
         },
         onClose: () => toast.info("Paystack checkout closed"),
       });
@@ -744,7 +758,10 @@ export function LaboratoryWorkspace({ section }: Props) {
       <Dialog
         open={paymentOrder != null}
         onOpenChange={(open) => {
-          if (!open && !paymentSaving) setPaymentOrder(null);
+          if (!open && !paymentSaving) {
+            setPaymentOrder(null);
+            setPaystackReference("");
+          }
         }}
       >
         <DialogContent className="sm:max-w-md">
@@ -763,7 +780,13 @@ export function LaboratoryWorkspace({ section }: Props) {
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label>Payment mode</Label>
-              <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+              <Select
+                value={paymentMethod}
+                onValueChange={(value) => {
+                  setPaymentMethod(value);
+                  setPaystackReference("");
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -786,7 +809,10 @@ export function LaboratoryWorkspace({ section }: Props) {
                 min="0.01"
                 step="0.01"
                 value={paymentAmount}
-                onChange={(event) => setPaymentAmount(event.target.value)}
+                onChange={(event) => {
+                  setPaymentAmount(event.target.value);
+                  setPaystackReference("");
+                }}
               />
             </div>
             {paymentMethod !== "mobile_money" && (
@@ -810,7 +836,10 @@ export function LaboratoryWorkspace({ section }: Props) {
               type="button"
               variant="outline"
               className="cursor-pointer"
-              onClick={() => setPaymentOrder(null)}
+              onClick={() => {
+                setPaymentOrder(null);
+                setPaystackReference("");
+              }}
               disabled={paymentSaving}
             >
               Cancel

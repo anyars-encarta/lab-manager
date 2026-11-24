@@ -56,7 +56,11 @@ const loadPaystackScript = () => {
       existing.addEventListener("load", () => resolve(), { once: true });
       existing.addEventListener(
         "error",
-        () => reject(new Error("Failed to load Paystack checkout script.")),
+        () => {
+          existing.remove();
+          paystackScriptPromise = null;
+          reject(new Error("Failed to load Paystack checkout script."));
+        },
         { once: true },
       );
       return;
@@ -66,7 +70,11 @@ const loadPaystackScript = () => {
     script.src = "https://js.paystack.co/v1/inline.js";
     script.async = true;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Failed to load Paystack checkout script."));
+    script.onerror = () => {
+      script.remove();
+      paystackScriptPromise = null;
+      reject(new Error("Failed to load Paystack checkout script."));
+    };
     document.head.appendChild(script);
   });
 

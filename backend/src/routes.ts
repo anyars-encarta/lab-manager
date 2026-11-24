@@ -50,6 +50,53 @@ const prefixNumber = (prefix: string) => {
   return `${prefix}-${date}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 };
 
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit,
+  timeoutMs = 10_000,
+) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const readLimitedImage = async (url: string, maxBytes = 5 * 1024 * 1024) => {
+  const response = await fetchWithTimeout(url, { redirect: "manual" });
+  if (!response.ok || response.status >= 300 && response.status < 400) {
+    throw new Error("Logo URL returned an invalid response");
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number.isFinite(Number(contentLength)) && Number(contentLength) > maxBytes) {
+    throw new Error("Logo exceeds the size limit");
+  }
+  if (!response.body) throw new Error("Logo response has no body");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("Logo exceeds the size limit");
+    }
+    chunks.push(value);
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return Buffer.from(result);
+};
+
 api.get("/me", (req, res) => res.json({ user: req.appUser }));
 
 api.get("/users", requireRole("admin"), asyncRoute(async (_req, res) => {
@@ -159,7 +206,7 @@ api.post("/laboratory-profile/logo", requireRole("admin"), asyncRoute(async (req
     dataUrl: z.string(),
     fileName: z.string().optional(),
   }).parse(req.body);
-  const match = body.dataUrl.match(/^data:(image\/(?:png|jpeg|webp|svg\+xml));base64,(.+)$/);
+  const match = body.dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
   if (!match) return res.status(400).json({ error: "Invalid image data" });
 
   const mimeType = match[1];
@@ -183,7 +230,7 @@ api.post("/laboratory-profile/logo", requireRole("admin"), asyncRoute(async (req
   uploadData.append("signature", signature);
   uploadData.append("folder", folder);
 
-  const uploadResponse = await fetch(uploadUrl, { method: "POST", body: uploadData });
+  const uploadResponse = await fetchWithTimeout(uploadUrl, { method: "POST", body: uploadData });
   const uploaded = await uploadResponse.json().catch(() => null) as {
     secure_url?: string;
     error?: { message?: string };
@@ -196,9 +243,36 @@ api.post("/laboratory-profile/logo", requireRole("admin"), asyncRoute(async (req
 }));
 
 api.put("/laboratory-profile", requireRole("admin"), asyncRoute(async (req, res) => {
+  let uploadHost: string | null = null;
+  const configuredUploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim();
+  if (configuredUploadUrl) {
+    try {
+      const parsed = new URL(configuredUploadUrl);
+      if (parsed.protocol === "https:") uploadHost = parsed.host.toLowerCase();
+    } catch {
+      uploadHost = null;
+    }
+  }
+  const logoUrlSchema = z.union([
+    z.literal(""),
+    z.literal(null),
+    z.string().refine((value) => {
+      try {
+        const url = new URL(value);
+        if (url.protocol !== "https:" || uploadHost === null) return false;
+        const allowedHosts = new Set([uploadHost]);
+        if (uploadHost.startsWith("api.")) {
+          allowedHosts.add(uploadHost.replace(/^api\./, "res."));
+        }
+        return allowedHosts.has(url.host.toLowerCase());
+      } catch {
+        return false;
+      }
+    }, "Logo URL must be an HTTPS URL hosted by the configured Cloudinary upload host"),
+  ]).optional();
   const body = z.object({
     name: z.string().min(2),
-    logoUrl: z.union([z.string(), z.literal("")]).nullable().optional(),
+    logoUrl: logoUrlSchema,
     address: z.string().nullable().optional(),
     phone: z.string().nullable().optional(),
     email: z.union([z.email(), z.literal("")]).nullable().optional(),
@@ -680,7 +754,7 @@ api.post("/orders/:id/payments", requireRole("admin", "account"), asyncRoute(asy
   if (body.method === "mobile_money") {
     if (!body.reference) return res.status(400).json({ error: "Paystack payment reference is required" });
     if (!process.env.PAYSTACK_SECRET_KEY) return res.status(500).json({ error: "Paystack is not configured" });
-    const verifyResponse = await fetch(
+    const verifyResponse = await fetchWithTimeout(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(body.reference)}`,
       { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } },
     );
@@ -692,33 +766,61 @@ api.post("/orders/:id/payments", requireRole("admin", "account"), asyncRoute(asy
     if (!verifyResponse.ok || !verifyBody?.status || verifyBody.data?.status !== "success") {
       return res.status(400).json({ error: "Paystack payment could not be verified" });
     }
+    const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+    const expectedCurrency = (profile?.currency || "GHS").toUpperCase();
+    if (!verifyBody.data?.currency ||
+        verifyBody.data.currency.toUpperCase() !== expectedCurrency) {
+      return res.status(400).json({ error: "Verified Paystack currency does not match the order currency" });
+    }
     if (Math.abs(verifiedAmount - body.amount) > 0.001) {
       return res.status(400).json({ error: "Verified Paystack amount does not match the payment" });
     }
   }
 
-  const paid = numberValue(order.paidAmount);
-  const total = numberValue(order.totalAmount);
-  if (paid + body.amount > total) return res.status(400).json({ error: "Payment exceeds outstanding balance" });
-  if (body.reference) {
-    const existing = await db.query.payments.findFirst({ where: eq(payments.reference, body.reference) });
-    if (existing) return res.status(409).json({ error: "This payment reference has already been received" });
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx.select().from(labOrders)
+        .where(eq(labOrders.id, order.id))
+        .for("update");
+      if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+
+      const paid = numberValue(lockedOrder.paidAmount);
+      const total = numberValue(lockedOrder.totalAmount);
+      if (paid + body.amount > total) {
+        throw Object.assign(new Error("Payment exceeds outstanding balance"), { statusCode: 400 });
+      }
+      const newPaid = paid + body.amount;
+      const [payment] = await tx.insert(payments).values({
+        receiptNumber: prefixNumber("RCP"),
+        orderId: lockedOrder.id,
+        amount: body.amount.toFixed(2),
+        method: body.method,
+        reference: body.reference,
+        receivedBy: req.appUser!.id,
+      }).returning();
+      await tx.update(labOrders).set({
+        paidAmount: newPaid.toFixed(2),
+        paymentStatus: newPaid >= total ? "paid" : "partial",
+        status: newPaid >= total ? "processing" : "awaiting_payment",
+      }).where(eq(labOrders.id, lockedOrder.id));
+      return payment;
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error &&
+        (error as { code?: string }).code === "23505") {
+      return res.status(409).json({ error: "This payment reference has already been received" });
+    }
+    if (error && typeof error === "object" && "cause" in error) {
+      const cause = (error as { cause?: { code?: string } }).cause;
+      if (cause?.code === "23505") return res.status(409).json({ error: "This payment reference has already been received" });
+    }
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
+    }
+    throw error;
   }
-  const newPaid = paid + body.amount;
-  const [payment] = await db.insert(payments).values({
-    receiptNumber: prefixNumber("RCP"),
-    orderId: order.id,
-    amount: body.amount.toFixed(2),
-    method: body.method,
-    reference: body.reference,
-    receivedBy: req.appUser!.id,
-  }).returning();
-  await db.update(labOrders).set({
-    paidAmount: newPaid.toFixed(2),
-    paymentStatus: newPaid >= total ? "paid" : "partial",
-    status: newPaid >= total ? "processing" : "awaiting_payment",
-  }).where(eq(labOrders.id, order.id));
-  res.status(201).json(payment);
 }));
 
 api.get("/payments/:id/receipt", asyncRoute(async (req, res) => {
@@ -736,12 +838,13 @@ api.get("/payments/:id/receipt", asyncRoute(async (req, res) => {
   pdf.pipe(res);
   if (profile?.logoUrl) {
     try {
-      const logoResponse = await fetch(profile.logoUrl);
-      if (logoResponse.ok) {
-        const logo = Buffer.from(await logoResponse.arrayBuffer());
-        pdf.image(logo, pdf.page.width / 2 - 22, pdf.y, { width: 44, height: 44 });
-        pdf.moveDown(2);
-      }
+      const logo = await readLimitedImage(profile.logoUrl);
+      pdf.image(logo, 0, pdf.y, {
+        fit: [44, 44],
+        align: "center",
+        valign: "center",
+      });
+      pdf.moveDown(2);
     } catch {
       // Receipt printing should continue when a remote logo is unavailable.
     }
@@ -764,7 +867,15 @@ api.get("/payments/:id/receipt", asyncRoute(async (req, res) => {
   pdf.text(`Amount paid: GH${String.fromCharCode(162)} ${numberValue(payment.amount).toFixed(2)}`, { continued: false });
   pdf.text(`Payment mode: ${payment.method.replace("_", " ").toUpperCase()}`);
   if (payment.reference) pdf.text(`Reference: ${payment.reference}`);
-  pdf.text(`Outstanding: GH${String.fromCharCode(162)} ${Math.max(0, numberValue(order.totalAmount) - numberValue(order.paidAmount)).toFixed(2)}`);
+  const orderPayments = await db.select().from(payments)
+    .where(eq(payments.orderId, order.id))
+    .orderBy(asc(payments.receivedAt), asc(payments.id));
+  let receivedThroughReceipt = 0;
+  for (const orderPayment of orderPayments) {
+    receivedThroughReceipt += numberValue(orderPayment.amount);
+    if (orderPayment.id === payment.id) break;
+  }
+  pdf.text(`Outstanding: GH${String.fromCharCode(162)} ${Math.max(0, numberValue(order.totalAmount) - receivedThroughReceipt).toFixed(2)}`);
   pdf.moveDown();
   pdf.text(`Received by: ${receiver?.name || "Authorized user"}`);
   pdf.moveDown();
@@ -902,12 +1013,13 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   pdf.pipe(res);
   if (profile?.logoUrl) {
     try {
-      const logoResponse = await fetch(profile.logoUrl);
-      if (logoResponse.ok) {
-        const logo = Buffer.from(await logoResponse.arrayBuffer());
-        pdf.image(logo, pdf.page.width / 2 - 32, pdf.y, { width: 64, height: 64 });
-        pdf.moveDown(3);
-      }
+      const logo = await readLimitedImage(profile.logoUrl);
+      pdf.image(logo, 0, pdf.y, {
+        fit: [64, 64],
+        align: "center",
+        valign: "center",
+      });
+      pdf.moveDown(3);
     } catch {
       // Report printing should continue when the remote logo is unavailable.
     }

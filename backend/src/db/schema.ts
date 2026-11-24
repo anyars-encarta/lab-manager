@@ -10,6 +10,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -254,7 +255,9 @@ export const payments = pgTable("payments", {
   reference: varchar("reference", { length: 100 }),
   receivedBy: text("received_by").notNull().references(() => users.id),
   receivedAt: timestamp("received_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("payments_reference_uidx").on(table.reference),
+]);
 
 export const nhiaClaims = pgTable("nhia_claims", {
   id: uuid("id").primaryKey().defaultRandom(),

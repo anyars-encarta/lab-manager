@@ -68,8 +68,8 @@ export function LaboratoryProfilePage() {
   };
 
   const uploadLogo = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.error("Please select a PNG or JPEG image");
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
@@ -152,7 +152,7 @@ export function LaboratoryProfilePage() {
                     <Input
                       id="laboratoryLogo"
                       type="file"
-                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                      accept="image/png,image/jpeg"
                       disabled={uploading}
                       className="cursor-pointer"
                       onChange={(event) => {
@@ -163,7 +163,7 @@ export function LaboratoryProfilePage() {
                     />
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">
-                        PNG, JPG, WebP or SVG · Maximum 5 MB
+                        PNG or JPEG · Maximum 5 MB
                       </p>
                       {form.logoUrl && (
                         <Button
