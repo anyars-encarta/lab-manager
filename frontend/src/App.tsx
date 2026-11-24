@@ -27,6 +27,7 @@ import { Dashboard } from "./pages/dashboard/dashboard";
 import { LaboratoryWorkspace } from "./pages/dashboard/workspace";
 import { PatientsPage } from "./pages/patients/patients";
 import { ReferringFacilitiesPage } from "./pages/facilities/referring-facilities";
+import { LaboratoryProfilePage } from "./pages/setup/laboratory-profile";
 import { InvestigationsPage } from "./pages/investigations/investigations";
 import { Login } from "./pages/login";
 import { authProvider } from "./providers/auth";
@@ -51,7 +52,7 @@ function ResourceGuard({
   resource,
   section,
 }: {
-  resource: "patients" | "orders" | "investigations" | "facilities" | "users" | "reports" | "claims";
+  resource: "patients" | "orders" | "investigations" | "facilities" | "laboratory-profile" | "users" | "reports" | "claims";
   section: "patients" | "orders" | "investigations" | "facilities" | "users" | "reports" | "claims";
 }) {
   const { data: identity } = useGetIdentity<RouteIdentity>();
@@ -67,6 +68,9 @@ function ResourceGuard({
   }
   if (allowed && resource === "facilities") {
     return <ReferringFacilitiesPage />;
+  }
+  if (allowed && resource === "laboratory-profile") {
+    return <LaboratoryProfilePage />;
   }
   if (allowed && resource === "investigations") {
     return <InvestigationsPage canWrite={role === "admin"} />;
@@ -92,7 +96,9 @@ const accessControlProvider: AccessControlProvider = {
       if (resource === "investigations" && action === "list") return { can: ["frontdesk", "technician"].includes(role) };
       if (resource === "reports" && action === "list") return { can: role === "doctor" };
       if (resource === "claims") return { can: false };
+      if (resource === "laboratory-profile") return { can: false };
       if (resource === "facilities" || resource === "users") return { can: false };
+      if (resource === "laboratory-profile" && action === "list") return { can: role === "admin" };
       return { can: false };
     } catch {
       return { can: false };
@@ -118,6 +124,7 @@ function App() {
                 { name: "orders", list: "/orders", meta: { label: "Lab Orders", icon: <ClipboardList /> } },
                 { name: "investigations", list: "/investigations", meta: { label: "Investigations", icon: <Microscope /> } },
                 { name: "facilities", list: "/facilities", meta: { label: "Referring Facilities", icon: <Building2 /> } },
+                { name: "laboratory-profile", list: "/laboratory-profile", meta: { label: "Laboratory Profile", icon: <Building2 /> } },
                 { name: "users", list: "/users", meta: { label: "User Management", icon: <UserCog />, canDelete: false } },
                 { name: "reports", list: "/reports", meta: { label: "Reports", icon: <BarChart3 /> } },
                 { name: "claims", list: "/claims", meta: { label: "NHIA Claims", icon: <ShieldCheck /> } },
@@ -145,6 +152,7 @@ function App() {
                   <Route path="/orders" element={<ResourceGuard resource="orders" section="orders" />} />
                   <Route path="/investigations" element={<ResourceGuard resource="investigations" section="investigations" />} />
                   <Route path="/facilities" element={<ResourceGuard resource="facilities" section="facilities" />} />
+                  <Route path="/laboratory-profile" element={<ResourceGuard resource="laboratory-profile" section="facilities" />} />
                   <Route path="/users" element={<ResourceGuard resource="users" section="users" />} />
                   <Route path="/reports" element={<ResourceGuard resource="reports" section="reports" />} />
                   <Route path="/claims" element={<ResourceGuard resource="claims" section="claims" />} />

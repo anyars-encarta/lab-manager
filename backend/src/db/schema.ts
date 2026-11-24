@@ -114,6 +114,18 @@ export const facilities = pgTable("facilities", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const laboratoryProfiles = pgTable("laboratory_profiles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 200 }).notNull().default("Laboratory"),
+  logoUrl: text("logo_url"),
+  address: text("address"),
+  phone: varchar("phone", { length: 30 }),
+  email: varchar("email", { length: 200 }),
+  slogan: text("slogan"),
+  currency: varchar("currency", { length: 10 }).notNull().default("GHS"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const patients = pgTable("patients", {
   id: uuid("id").primaryKey().defaultRandom(),
   patientNumber: varchar("patient_number", { length: 50 }).notNull().unique(),

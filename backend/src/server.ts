@@ -11,7 +11,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use("/api/auth", toNodeHandler(auth));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "8mb" }));
 
 app.get("/", (_req, res) => {
   res.send("Laboratory Backend Server is running!");
