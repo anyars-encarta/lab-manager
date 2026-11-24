@@ -814,7 +814,13 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 api.get("/orders", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const rows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
-  res.json(status ? rows.filter((row) => row.status === status) : rows);
+  const detailedRows = await Promise.all(rows.map(async (row) => {
+    const patient = await db.query.patients.findFirst({
+      where: eq(patients.id, row.patientId),
+    });
+    return { ...row, patient };
+  }));
+  res.json(status ? detailedRows.filter((row) => row.status === status) : detailedRows);
 }));
 
 api.get("/orders/:id", asyncRoute(async (req, res) => {
@@ -822,7 +828,20 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
   if (!order) return res.status(404).json({ error: "Order not found" });
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, order.patientId) });
-  res.json({ ...order, patient, items });
+  const detailedItems = await Promise.all(items.map(async (item) => {
+    const investigation = await db.query.investigations.findFirst({
+      where: eq(investigations.id, item.investigationId),
+    });
+    const itemParameters = investigation
+      ? await db.select().from(parameters)
+          .where(eq(parameters.investigationId, investigation.id))
+          .orderBy(asc(parameters.sortOrder), asc(parameters.name))
+      : [];
+    const results = await db.select().from(resultEntries)
+      .where(eq(resultEntries.orderItemId, item.id));
+    return { ...item, investigation, parameters: itemParameters, results };
+  }));
+  res.json({ ...order, patient, items: detailedItems });
 }));
 
 api.get("/payments/paystack/config", requireRole("admin", "account"), asyncRoute(async (_req, res) => {
@@ -1091,6 +1110,23 @@ api.post("/orders/:id/complete", requireRole("admin", "technician"), asyncRoute(
   if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
     return res.status(409).json({ error: "Payment must be received in full before the report can be completed" });
   }
+  const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+  for (const item of items) {
+    const investigation = await db.query.investigations.findFirst({
+      where: eq(investigations.id, item.investigationId),
+    });
+    if (!investigation) continue;
+    const itemParameters = await db.select().from(parameters)
+      .where(and(eq(parameters.investigationId, investigation.id), eq(parameters.active, true)));
+    const existingResults = await db.select().from(resultEntries)
+      .where(eq(resultEntries.orderItemId, item.id));
+    const capturedIds = new Set(existingResults.map((entry) => entry.parameterId));
+    if (itemParameters.some((parameter) => !capturedIds.has(parameter.id))) {
+      return res.status(409).json({
+        error: `All parameters must be completed for ${investigation.name}`,
+      });
+    }
+  }
   const [updated] = await db.update(labOrders).set({ status: "completed" }).where(eq(labOrders.id, order.id)).returning();
   if (!updated) return res.status(404).json({ error: "Order not found" });
   res.json(updated);
@@ -1124,6 +1160,8 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   pdf.fontSize(18).text(profile?.name || "Laboratory", { align: "center" });
   pdf.fontSize(10).text(profile?.address || "", { align: "center" });
   if (profile?.phone) pdf.text(profile.phone, { align: "center" });
+  if (profile?.email) pdf.text(profile.email, { align: "center" });
+  if (profile?.slogan) pdf.fontSize(9).text(profile.slogan, { align: "center", oblique: true });
   pdf.moveDown();
   pdf.fontSize(16).text("Laboratory Test Report", { align: "center" });
   pdf.moveDown();

@@ -4,8 +4,10 @@ import { useGetIdentity } from "@refinedev/core";
 import {
   Building2,
   ClipboardList,
+  Download,
   Edit,
   FlaskConical,
+  FileText,
   Microscope,
   Plus,
   Search,
@@ -120,6 +122,14 @@ export function LaboratoryWorkspace({ section }: Props) {
   } | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [resultOrder, setResultOrder] = useState<any>(null);
+  const [resultDraft, setResultDraft] = useState<Record<string, {
+    value: string;
+    abnormalFlag?: "normal" | "high" | "low" | "critical";
+    remarks: string;
+  }>>({});
+  const [resultSaving, setResultSaving] = useState(false);
+  const [resultError, setResultError] = useState("");
   const requestGeneration = useRef(0);
   const [TitleIcon] = [titles[section][2]];
 
@@ -591,6 +601,125 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const openResults = async (order: any) => {
+    setResultError("");
+    setResultDraft({});
+    setResultOrder(null);
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${order.id}`, {
+        credentials: "include",
+      });
+      const detailed = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(detailed?.error || "Unable to load laboratory order");
+      const draft: typeof resultDraft = {};
+      for (const item of detailed.items || []) {
+        for (const parameter of item.parameters || []) {
+          const existing = (item.results || []).find(
+            (result: any) => result.parameterId === parameter.id,
+          );
+          draft[`${item.id}:${parameter.id}`] = {
+            value: existing?.value || "",
+            abnormalFlag: existing?.abnormalFlag || undefined,
+            remarks: existing?.remarks || "",
+          };
+        }
+      }
+      setResultDraft(draft);
+      setResultOrder(detailed);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to open result capture");
+    }
+  };
+
+  const saveResults = async (item: any) => {
+    setResultSaving(true);
+    setResultError("");
+    try {
+      const results = (item.parameters || [])
+        .filter((parameter: any) => parameter.active)
+        .map((parameter: any) => ({
+          parameterId: parameter.id,
+          ...resultDraft[`${item.id}:${parameter.id}`],
+          value: resultDraft[`${item.id}:${parameter.id}`]?.value || "",
+          remarks: resultDraft[`${item.id}:${parameter.id}`]?.remarks || "",
+        }));
+      if (results.some((result: any) => !result.value.trim())) {
+        throw new Error("Enter a value for every active parameter");
+      }
+      const response = await fetch(
+        `${API_URL}/api/orders/${resultOrder.id}/items/${item.id}/results`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ results }),
+        },
+      );
+      const saved = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(saved?.error || "Unable to save results");
+      toast.success("Results saved", {
+        description: `${item.investigation?.name || "Investigation"} results were captured.`,
+      });
+      await openResults(resultOrder);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to save results";
+      setResultError(message);
+      toast.error("Result capture failed", { description: message });
+    } finally {
+      setResultSaving(false);
+    }
+  };
+
+  const completeResultOrder = async () => {
+    if (!resultOrder) return;
+    setResultSaving(true);
+    setResultError("");
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${resultOrder.id}/complete`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const completed = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(completed?.error || "Unable to complete report");
+      toast.success("Report completed");
+      setResultOrder(null);
+      await load();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to complete report";
+      setResultError(message);
+      toast.error("Report could not be completed", { description: message });
+    } finally {
+      setResultSaving(false);
+    }
+  };
+
+  const openLaboratoryReport = async (order: any, download = false) => {
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${order.id}/report`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || "Unable to open laboratory report");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (download) {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${order.orderNumber}.pdf`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to open laboratory report");
+    }
+  };
+
   const filtered = rows.filter((row) =>
     JSON.stringify(row).toLowerCase().includes(search.toLowerCase()),
   );
@@ -882,7 +1011,12 @@ export function LaboratoryWorkspace({ section }: Props) {
                 section={section}
                 rows={filtered}
                 canReceivePayment={role === "admin" || role === "account"}
+                canCaptureResults={role === "admin" || role === "technician"}
+                canViewReports={role === "admin" || role === "frontdesk" || role === "account" || role === "technician" || role === "doctor"}
                 onReceivePayment={(order) => void openPayment(order)}
+                onCaptureResults={(order) => void openResults(order)}
+                onOpenReport={(order) => void openLaboratoryReport(order)}
+                onDownloadReport={(order) => void openLaboratoryReport(order, true)}
                 onEditUser={(user) => {
                   invalidateUserUploadSession();
                   setEditingUser(user);
@@ -910,6 +1044,129 @@ export function LaboratoryWorkspace({ section }: Props) {
           </CardContent>
         </Card>
       )}
+      <Dialog
+        open={resultOrder != null}
+        onOpenChange={(open) => {
+          if (!open && !resultSaving) {
+            setResultOrder(null);
+            setResultError("");
+          }
+        }}
+      >
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>Capture laboratory results</DialogTitle>
+            <DialogDescription>
+              {resultOrder
+                ? `${resultOrder.orderNumber} · ${resultOrder.patient?.firstName || ""} ${resultOrder.patient?.lastName || ""}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 py-2">
+            {resultOrder?.items?.map((item: any) => (
+              <Card key={item.id}>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{item.investigation?.name || "Investigation"}</CardTitle>
+                  <CardDescription>
+                    {item.investigation?.specimenType || "Specimen"} · {item.parameters?.filter((p: any) => p.active).length || 0} parameter(s)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(item.parameters || []).filter((parameter: any) => parameter.active).map((parameter: any) => {
+                    const key = `${item.id}:${parameter.id}`;
+                    const draft = resultDraft[key] || { value: "", remarks: "" };
+                    return (
+                      <div key={parameter.id} className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_180px_1fr]">
+                        <div className="space-y-2">
+                          <Label>{parameter.name}{parameter.unit ? ` (${parameter.unit})` : ""}</Label>
+                          <Input
+                            value={draft.value}
+                            placeholder={parameter.referenceRange || "Enter result"}
+                            onChange={(event) => setResultDraft((current) => ({
+                              ...current,
+                              [key]: { ...draft, value: event.target.value },
+                            }))}
+                          />
+                          {parameter.referenceRange && (
+                            <p className="text-xs text-muted-foreground">Reference: {parameter.referenceRange}</p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Flag</Label>
+                          <Select
+                            value={draft.abnormalFlag || "normal"}
+                            onValueChange={(value) => setResultDraft((current) => ({
+                              ...current,
+                              [key]: {
+                                ...draft,
+                                abnormalFlag: value as "normal" | "high" | "low" | "critical",
+                              },
+                            }))}
+                          >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="normal">Normal</SelectItem>
+                              <SelectItem value="high">High</SelectItem>
+                              <SelectItem value="low">Low</SelectItem>
+                              <SelectItem value="critical">Critical</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Remarks</Label>
+                          <Input
+                            value={draft.remarks}
+                            onChange={(event) => setResultDraft((current) => ({
+                              ...current,
+                              [key]: { ...draft, remarks: event.target.value },
+                            }))}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="cursor-pointer"
+                    disabled={resultSaving}
+                    onClick={() => void saveResults(item)}
+                  >
+                    Save {item.investigation?.name || "investigation"} results
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+            {resultError && (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {resultError}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setResultOrder(null)}
+              disabled={resultSaving}
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              className="cursor-pointer"
+              onClick={() => void completeResultOrder()}
+              disabled={resultSaving}
+            >
+              Complete report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={paymentOrder != null}
         onOpenChange={(open) => {
@@ -1143,14 +1400,24 @@ function RecordTable({
   section,
   rows,
   canReceivePayment = false,
+  canCaptureResults = false,
+  canViewReports = false,
   onReceivePayment,
+  onCaptureResults,
+  onOpenReport,
+  onDownloadReport,
   onEditUser,
   onToggleUser,
 }: {
   section: Props["section"];
   rows: any[];
   canReceivePayment?: boolean;
+  canCaptureResults?: boolean;
+  canViewReports?: boolean;
   onReceivePayment?: (order: any) => void;
+  onCaptureResults?: (order: any) => void;
+  onOpenReport?: (order: any) => void;
+  onDownloadReport?: (order: any) => void;
   onEditUser?: (user: any) => void;
   onToggleUser?: (user: any) => void;
 }) {
@@ -1160,6 +1427,7 @@ function RecordTable({
     patients: ["patientNumber", "name", "phone", "nhisNumber", "createdAt"],
     orders: [
       "orderNumber",
+      "patient",
       "status",
       "paymentStatus",
       "totalAmount",
@@ -1188,7 +1456,7 @@ function RecordTable({
   };
   const tableColumns = [
     ...columns[section],
-    ...(section === "orders" && canReceivePayment ? ["actions"] : []),
+    ...(section === "orders" ? ["actions"] : []),
     ...(section === "users" ? ["actions"] : []),
   ];
   return (
@@ -1238,18 +1506,62 @@ function RecordTable({
                       </Button>
                     </div>
                   ) : Number(row.paidAmount || 0) < Number(row.totalAmount || 0) ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => onReceivePayment?.(row)}
-                    >
-                      Receive payment
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      {canReceivePayment && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onReceivePayment?.(row)}
+                        >
+                          Receive payment
+                        </Button>
+                      )}
+                      {canCaptureResults && (
+                        <span className="text-xs text-muted-foreground">Payment required</span>
+                      )}
+                    </div>
                   ) : (
-                    <Badge>Paid</Badge>
+                    <div className="flex flex-wrap gap-2">
+                      {canCaptureResults && row.status !== "completed" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="cursor-pointer"
+                          onClick={() => onCaptureResults?.(row)}
+                        >
+                          <FileText className="mr-1 h-3.5 w-3.5" />
+                          Capture results
+                        </Button>
+                      )}
+                      {row.status === "completed" && canViewReports && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="cursor-pointer"
+                            onClick={() => onOpenReport?.(row)}
+                          >
+                            Print
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="cursor-pointer"
+                            onClick={() => onDownloadReport?.(row)}
+                          >
+                            <Download className="mr-1 h-3.5 w-3.5" />
+                            Download
+                          </Button>
+                        </>
+                      )}
+                      {row.status !== "completed" && !canCaptureResults && <Badge>Paid</Badge>}
+                    </div>
                   )
                 ) : column === "name" && section === "patients" ? (
                   patientName(row)
+                ) : column === "patient" ? (
+                  `${row.patient?.firstName || ""} ${row.patient?.lastName || ""}`.trim() ||
+                  "—"
                 ) : column === "active" ? (
                   <Badge variant={row[column] ? "default" : "secondary"}>
                     {row[column] ? "Active" : "Inactive"}
