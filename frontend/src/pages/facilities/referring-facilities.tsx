@@ -51,6 +51,7 @@ export function ReferringFacilitiesPage() {
   const [originalForm, setOriginalForm] = useState(emptyFacility);
   const editorSession = useRef(0);
   const requestGeneration = useRef(0);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const load = async (loadPage = page, loadSearch = debouncedSearch) => {
     const generation = ++requestGeneration.current;
@@ -94,7 +95,7 @@ export function ReferringFacilitiesPage() {
 
   useEffect(() => {
     void load(page, debouncedSearch);
-  }, [page, pageSize, debouncedSearch]);
+  }, [page, pageSize, debouncedSearch, refreshToken]);
 
   const openCreate = () => {
     if (saving) return;
@@ -156,7 +157,7 @@ export function ReferringFacilitiesPage() {
         description: `${form.name} was saved successfully.`,
       });
       if (session === editorSession.current) setDialogOpen(false);
-      await load(page, debouncedSearch);
+      setRefreshToken((current) => current + 1);
     } catch (error) {
       toast.error("Unable to save referring facility", {
         description: error instanceof Error ? error.message : "An unexpected error occurred.",

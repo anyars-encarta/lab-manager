@@ -270,6 +270,9 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
   const saveParameter = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedTestId) return;
+    const parameterSession = profileSessionGeneration.current;
+    const investigationId = selectedTestId;
+    let retainedParameterId = editingParameter?.id || savedParameterIdRef.current || null;
     setSaving(true);
     setSubmissionError("");
     const form = new FormData(event.currentTarget);
@@ -291,8 +294,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       active: parameterActive,
     };
     try {
-      const retainedParameterId = editingParameter?.id || savedParameterIdRef.current;
-      const response = await fetch(retainedParameterId ? `${API_URL}/api/parameters/${retainedParameterId}` : `${API_URL}/api/investigations/${selectedTestId}/parameters`, {
+      const response = await fetch(retainedParameterId ? `${API_URL}/api/parameters/${retainedParameterId}` : `${API_URL}/api/investigations/${investigationId}/parameters`, {
         method: retainedParameterId ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -300,17 +302,20 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || "Unable to save parameter");
+      if (parameterSession !== profileSessionGeneration.current) return;
       toast.success(editingParameter ? "Parameter updated" : "Parameter created", {
         description: `${payload.name} was saved successfully.`,
       });
       const savedParameterId = editingParameter?.id || savedParameterIdRef.current || body?.id;
       if (savedParameterId) savedParameterIdRef.current = savedParameterId;
+      retainedParameterId = savedParameterId || retainedParameterId;
       const profileRange = String(values.profileRange || "").trim();
       const profileAgeMin = String(values.profileAgeMin ?? "0").trim();
       const profileAgeMax = String(values.profileAgeMax || "").trim();
       const profileLow = String(values.profileLow || "").trim();
       const profileHigh = String(values.profileHigh || "").trim();
       if (savedParameterId && (profileRange || profileLow || profileHigh)) {
+        if (parameterSession !== profileSessionGeneration.current) return;
         const profileResponse = await fetch(`${API_URL}/api/parameters/${savedParameterId}/reference-ranges`, {
           method: "POST",
           credentials: "include",
@@ -325,6 +330,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
           }),
         });
         if (!profileResponse.ok) throw new Error("Parameter saved, but reference profile could not be added");
+        if (parameterSession !== profileSessionGeneration.current) return;
         toast.success("Reference profile added", {
           description: "The age/gender reference range was saved successfully.",
         });
@@ -332,8 +338,10 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
         setProfileDraft({ gender: "all", ageMin: "0", ageMax: "", referenceRange: "", referenceLow: "", referenceHigh: "" });
         await loadReferenceProfiles(savedParameterId, profileSessionGeneration.current);
       }
-      setParameterDialogOpen(false);
-      await loadParameters(selectedTestId);
+      if (parameterSession === profileSessionGeneration.current) {
+        setParameterDialogOpen(false);
+        await loadParameters(investigationId);
+      }
     } catch (error) {
       toast.error("Unable to save parameter", {
         description: error instanceof Error ? error.message : "An unexpected error occurred.",

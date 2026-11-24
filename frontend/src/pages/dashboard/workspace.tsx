@@ -92,22 +92,29 @@ export function LaboratoryWorkspace({ section }: Props) {
       if (section === "orders") {
         try {
           const [investigationResponse, patientResponse] = await Promise.all([
-            fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
+                (async () => {
+                  const investigations: any[] = [];
+                  let page = 1;
+                  while (true) {
+                    const response = await fetch(`${API_URL}/api/investigations?page=${page}&pageSize=100`, { credentials: "include" });
+                    if (!response.ok) throw new Error("Unable to load investigations");
+                    const payload = await response.json();
+                    const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
+                    investigations.push(...rows);
+                    if (rows.length === 0 || investigations.length >= Number(payload.total || investigations.length)) break;
+                    page += 1;
+                  }
+                  return investigations;
+                })(),
             fetch(`${API_URL}/api/patients`, { credentials: "include" }),
           ]);
-          if (!investigationResponse.ok) throw new Error("Unable to load investigations");
           if (!patientResponse.ok) throw new Error("Unable to load patients");
-          const [investigationsData, patientsData] = await Promise.all([
-            investigationResponse.json(),
-            patientResponse.json(),
-          ]);
+              const [investigationsData, patientsData] = await Promise.all([investigationResponse, patientResponse.json()]);
           if (generation === requestGeneration.current) {
             setInvestigations(
-              Array.isArray(investigationsData.data)
-                ? investigationsData.data
-                : Array.isArray(investigationsData)
-                  ? investigationsData
-                  : [],
+              Array.isArray(investigationsData)
+                ? investigationsData
+                : [],
             );
             setPatients(Array.isArray(patientsData) ? patientsData : []);
           }

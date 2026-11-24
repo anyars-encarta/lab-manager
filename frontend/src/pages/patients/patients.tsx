@@ -182,7 +182,13 @@ export function PatientsPage() {
           if (!response.ok) throw new Error("Unable to load investigations");
           const payload = await response.json();
           const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
-          investigations.push(...rows);
+          const seen = new Set(investigations.map((item) => item.id));
+          for (const row of rows) {
+            if (!seen.has(row.id)) {
+              investigations.push(row);
+              seen.add(row.id);
+            }
+          }
           if (rows.length === 0 || investigations.length >= Number(payload.total || investigations.length)) break;
           lookupPage += 1;
         }
@@ -472,7 +478,17 @@ export function PatientsPage() {
       setDialogOpen(false);
       setFacilityId("");
       setSelectedTests([]);
-      await load(page, pageSize, debouncedSearch);
+      const refreshedParams = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (debouncedSearch.trim()) refreshedParams.set("search", debouncedSearch.trim());
+      const refreshResponse = await fetch(`${API_URL}/api/patients?${refreshedParams}`, { credentials: "include" });
+      if (refreshResponse.ok) {
+        const refreshed = await refreshResponse.json();
+        setPatients(Array.isArray(refreshed.data) ? refreshed.data : Array.isArray(refreshed) ? refreshed : []);
+        setTotal(Number(refreshed.total || (Array.isArray(refreshed) ? refreshed.length : 0)));
+      }
     } catch (submissionFailure) {
       toast.error("Unable to register patient", {
         description:
