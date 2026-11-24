@@ -4,16 +4,19 @@ import { useGetIdentity } from "@refinedev/core";
 import {
   Building2,
   ClipboardList,
+  Edit,
   FlaskConical,
   Microscope,
   Plus,
   Search,
   ShieldCheck,
+  Power,
   UserCog,
   Users,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/refine-ui/layout/breadcrumb";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -103,6 +106,10 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [patients, setPatients] = useState<any[]>([]);
   const [loadError, setLoadError] = useState("");
   const [submissionError, setSubmissionError] = useState("");
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [userImage, setUserImage] = useState("");
+  const [uploadingUserImage, setUploadingUserImage] = useState(false);
+  const userUploadSession = useRef(0);
   const [paymentOrder, setPaymentOrder] = useState<any>(null);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -220,16 +227,68 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const invalidateUserUploadSession = () => {
+    userUploadSession.current += 1;
+    setUploadingUserImage(false);
+  };
+
   useEffect(() => {
+    invalidateUserUploadSession();
     setRows([]);
     setLoadError("");
     setSubmissionError("");
+    setEditingUser(null);
+    setUserImage("");
     setSearch("");
     void load();
   }, [section]);
 
+  const uploadUserImage = async (file: File) => {
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.error("Please select a PNG or JPEG image");
+      return;
+    }
+    const session = ++userUploadSession.current;
+    setUploadingUserImage(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Unable to read image"));
+        reader.readAsDataURL(file);
+      });
+      if (session !== userUploadSession.current) return;
+      const response = await fetch(`${API_URL}/api/users/image`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl, fileName: file.name }),
+      });
+      if (session !== userUploadSession.current) return;
+      const result = await response.json().catch(() => null);
+      if (session !== userUploadSession.current) return;
+      if (!response.ok || !result?.secureUrl) {
+        throw new Error(result?.error || "Unable to upload image");
+      }
+      setUserImage(result.secureUrl);
+      toast.success("Image uploaded");
+    } catch (error) {
+      if (session === userUploadSession.current) {
+        toast.error(error instanceof Error ? error.message : "Unable to upload image");
+      }
+    } finally {
+      if (session === userUploadSession.current) {
+        setUploadingUserImage(false);
+      }
+    }
+  };
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (section === "users" && uploadingUserImage) {
+      toast.error("Please wait for the image upload to finish");
+      return;
+    }
     setSaving(true);
     setMessage("");
     setSubmissionError("");
@@ -308,13 +367,22 @@ export function LaboratoryWorkspace({ section }: Props) {
         const path = pathMap[section];
         if (!path) return;
         let payload: Record<string, unknown> = values;
-        if (section === "users")
-          payload = {
-            name: values.name,
-            email: values.email,
-            password: values.password,
-            role: values.role,
-          };
+        if (section === "users") {
+          payload = editingUser
+            ? {
+                name: values.name,
+                email: values.email,
+                role: values.role,
+                image: userImage || null,
+              }
+            : {
+                name: values.name,
+                email: values.email,
+                password: values.password,
+                role: values.role,
+                image: userImage || null,
+              };
+        }
         if (section === "investigations")
           payload = {
             ...values,
@@ -322,8 +390,9 @@ export function LaboratoryWorkspace({ section }: Props) {
             uncoveredTariff: Number(values.uncoveredTariff || 0),
             topUp: Number(values.topUp || 0),
           };
-        const response = await fetch(`${API_URL}${path}`, {
-          method: "POST",
+        const requestPath = editingUser ? `${path}/${editingUser.id}` : path;
+        const response = await fetch(`${API_URL}${requestPath}`, {
+          method: editingUser ? "PATCH" : "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -333,16 +402,24 @@ export function LaboratoryWorkspace({ section }: Props) {
             (await response.json()).error || "Unable to save record",
           );
         toast.success(
-          section === "users" ? "User account created" : "Setup record saved",
+          section === "users"
+            ? editingUser ? "User account updated" : "User account created"
+            : "Setup record saved",
           {
             description:
               section === "users"
-                ? "The new account and role were saved."
+                ? editingUser
+                  ? "The account details, role, and image were saved."
+                  : "The new account and role were saved."
                 : "The setup information was saved successfully.",
           },
         );
       }
       setMessage("Saved successfully");
+      if (section === "users") {
+        setEditingUser(null);
+        invalidateUserUploadSession();
+      }
       setDialogOpen(false);
       await load();
     } catch (error) {
@@ -543,9 +620,20 @@ export function LaboratoryWorkspace({ section }: Props) {
             "reports",
             "claims",
           ].includes(section) && (
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <Dialog open={dialogOpen} onOpenChange={(open) => {
+              setDialogOpen(open);
+              if (!open) {
+                invalidateUserUploadSession();
+                setEditingUser(null);
+                setUserImage("");
+              }
+            }}>
               <DialogTrigger asChild>
-                <Button className="gap-2 cursor-pointer">
+                <Button className="gap-2 cursor-pointer" onClick={() => {
+                  invalidateUserUploadSession();
+                  setEditingUser(null);
+                  setUserImage("");
+                }}>
                   <Plus className="h-4 w-4" />
                   {section === "claims"
                     ? "Generate claim"
@@ -574,6 +662,8 @@ export function LaboratoryWorkspace({ section }: Props) {
                         ? "Generate NHIA claim"
                         : section === "reports"
                         ? "Generate laboratory report"
+                        : editingUser
+                        ? "Edit user"
                         : `Create ${
                             section === "investigations"
                               ? "investigation"
@@ -605,20 +695,45 @@ export function LaboratoryWorkspace({ section }: Props) {
                     )}
                     {section === "users" && (
                       <>
-                        <Field name="name" label="Full name" required />
+                        <div className="flex items-center gap-4">
+                          <Avatar className="h-16 w-16">
+                            {userImage && <AvatarImage src={userImage} alt={editingUser?.name || "User"} />}
+                            <AvatarFallback>{(editingUser?.name || "U").split(" ").slice(0, 2).map((part: string) => part[0]).join("").toUpperCase()}</AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <Label htmlFor="userImage">Profile image</Label>
+                            <Input
+                              id="userImage"
+                              type="file"
+                              accept="image/png,image/jpeg"
+                              disabled={uploadingUserImage}
+                              className="cursor-pointer"
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) void uploadUserImage(file);
+                                event.target.value = "";
+                              }}
+                            />
+                            <p className="text-xs text-muted-foreground">PNG or JPEG · Maximum 5 MB</p>
+                          </div>
+                        </div>
+                        <Field name="name" label="Full name" required defaultValue={editingUser?.name} />
                         <Field
                           name="email"
                           label="Email"
                           type="email"
                           required
+                          defaultValue={editingUser?.email}
                         />
-                        <Field
-                          name="password"
-                          label="Password"
-                          type="password"
-                          required
-                        />
-                        <RoleField />
+                        {!editingUser && (
+                          <Field
+                            name="password"
+                            label="Password"
+                            type="password"
+                            required
+                          />
+                        )}
+                        <RoleField defaultValue={editingUser?.role} />
                       </>
                     )}
                     {section === "facilities" && (
@@ -696,12 +811,20 @@ export function LaboratoryWorkspace({ section }: Props) {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setDialogOpen(false)}
+                      className="cursor-pointer"
+                      onClick={() => {
+                        invalidateUserUploadSession();
+                        setDialogOpen(false);
+                      }}
                     >
                       Cancel
                     </Button>
-                    <Button type="submit" disabled={saving}>
-                      {saving ? "Saving..." : "Save"}
+                    <Button type="submit" disabled={saving || (section === "users" && uploadingUserImage)} className="cursor-pointer">
+                      {section === "users" && uploadingUserImage
+                        ? "Uploading..."
+                        : saving
+                          ? "Saving..."
+                          : "Save"}
                     </Button>
                   </DialogFooter>
                 </form>
@@ -760,6 +883,28 @@ export function LaboratoryWorkspace({ section }: Props) {
                 rows={filtered}
                 canReceivePayment={role === "admin" || role === "account"}
                 onReceivePayment={(order) => void openPayment(order)}
+                onEditUser={(user) => {
+                  invalidateUserUploadSession();
+                  setEditingUser(user);
+                  setUserImage(user.image || "");
+                  setDialogOpen(true);
+                }}
+                onToggleUser={async (user) => {
+                  try {
+                    const response = await fetch(`${API_URL}/api/users/${user.id}`, {
+                      method: "PATCH",
+                      credentials: "include",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ active: !user.active }),
+                    });
+                    const result = await response.json().catch(() => null);
+                    if (!response.ok) throw new Error(result?.error || "Unable to update user");
+                    toast.success(user.active ? "User disabled" : "User enabled");
+                    await load();
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Unable to update user");
+                  }
+                }}
               />
             )}
           </CardContent>
@@ -883,12 +1028,14 @@ function Field({
   type = "text",
   required = false,
   step,
+  defaultValue,
 }: {
   name: string;
   label: string;
   type?: string;
   required?: boolean;
   step?: number | string;
+  defaultValue?: string;
 }) {
   return (
     <div className="space-y-2">
@@ -899,6 +1046,7 @@ function Field({
         type={type}
         required={required}
         step={step}
+        defaultValue={defaultValue}
       />
     </div>
   );
@@ -924,11 +1072,11 @@ function FacilityField({ facilities }: { facilities: any[] }) {
   );
 }
 
-function RoleField() {
+function RoleField({ defaultValue }: { defaultValue?: string }) {
   return (
     <div className="space-y-2">
       <Label>Role</Label>
-      <Select name="role" required>
+      <Select name="role" required defaultValue={defaultValue}>
         <SelectTrigger>
           <SelectValue placeholder="Select role" />
         </SelectTrigger>
@@ -996,11 +1144,15 @@ function RecordTable({
   rows,
   canReceivePayment = false,
   onReceivePayment,
+  onEditUser,
+  onToggleUser,
 }: {
   section: Props["section"];
   rows: any[];
   canReceivePayment?: boolean;
   onReceivePayment?: (order: any) => void;
+  onEditUser?: (user: any) => void;
+  onToggleUser?: (user: any) => void;
 }) {
   const patientName = (row: any) =>
     `${row.firstName || ""} ${row.lastName || ""}`.trim();
@@ -1037,6 +1189,7 @@ function RecordTable({
   const tableColumns = [
     ...columns[section],
     ...(section === "orders" && canReceivePayment ? ["actions"] : []),
+    ...(section === "users" ? ["actions"] : []),
   ];
   return (
     <Table>
@@ -1063,7 +1216,28 @@ function RecordTable({
             {tableColumns.map((column) => (
               <TableCell key={column}>
                 {column === "actions" ? (
-                  Number(row.paidAmount || 0) < Number(row.totalAmount || 0) ? (
+                  section === "users" ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="cursor-pointer"
+                        onClick={() => onEditUser?.(row)}
+                      >
+                        <Edit className="mr-1 h-3.5 w-3.5" />
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={row.active ? "destructive" : "outline"}
+                        className="cursor-pointer"
+                        onClick={() => onToggleUser?.(row)}
+                      >
+                        <Power className="mr-1 h-3.5 w-3.5" />
+                        {row.active ? "Disable" : "Enable"}
+                      </Button>
+                    </div>
+                  ) : Number(row.paidAmount || 0) < Number(row.totalAmount || 0) ? (
                     <Button
                       size="sm"
                       variant="outline"
