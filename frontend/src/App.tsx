@@ -32,15 +32,14 @@ import { InvestigationsPage } from "./pages/investigations/investigations";
 import { Login } from "./pages/login";
 import { authProvider } from "./providers/auth";
 import { dataProvider } from "./providers/data";
-import { ShieldX } from "lucide-react";
 
-function AccessDenied() {
+function LoadingWorkspace() {
   return (
     <div className="grid min-h-[60vh] place-items-center">
       <div className="text-center">
-        <ShieldX className="mx-auto h-10 w-10 text-destructive" />
-        <h1 className="mt-4 text-xl font-semibold">Access denied</h1>
-        <p className="mt-2 text-sm text-muted-foreground">You do not have permission to view this section.</p>
+        <img src="/conical_flask.gif" alt="Conical Flask" className="mx-auto h-30 w-30 rounded-full" />
+        <h1 className="mt-4 text-xl font-semibold">Loading workspace...</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Hold on tight</p>
       </div>
     </div>
   );
@@ -75,7 +74,7 @@ function ResourceGuard({
   if (allowed && resource === "investigations") {
     return <InvestigationsPage canWrite={role === "admin"} />;
   }
-  return allowed ? <LaboratoryWorkspace section={section} /> : <AccessDenied />;
+  return allowed ? <LaboratoryWorkspace section={section} /> : <LoadingWorkspace />;
 }
 
 const accessControlProvider: AccessControlProvider = {
