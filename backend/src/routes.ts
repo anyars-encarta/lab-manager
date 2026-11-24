@@ -103,31 +103,106 @@ api.get("/users", requireRole("admin"), asyncRoute(async (_req, res) => {
   res.json(await db.select().from(users).orderBy(asc(users.name)));
 }));
 
+api.get("/users/:id", requireRole("admin"), asyncRoute(async (req, res) => {
+  const id = String(req.params.id);
+  const user = await db.query.users.findFirst({ where: eq(users.id, id) });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json(user);
+}));
+
 api.post("/users", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2),
     email: z.email(),
     password: z.string().min(8),
     role: z.enum(["admin", "frontdesk", "account", "technician", "doctor"]),
+    image: z.string().optional(),
   }).parse(req.body);
 
   const created = await auth.api.signUpEmail({
     body: { name: body.name, email: body.email, password: body.password },
   });
-  await db.update(users).set({ role: body.role }).where(eq(users.id, created.user.id));
+  await db.update(users).set({ role: body.role, image: body.image || null }).where(eq(users.id, created.user.id));
   const user = await db.query.users.findFirst({ where: eq(users.id, created.user.id) });
   res.status(201).json(user);
 }));
 
 api.patch("/users/:id", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
+    name: z.string().min(2).optional(),
+    email: z.email().optional(),
+    image: z.string().nullable().optional(),
     role: z.enum(["admin", "frontdesk", "account", "technician", "doctor"]).optional(),
     active: z.boolean().optional(),
   }).parse(req.body);
   const id = String(req.params.id);
-  const [updated] = await db.update(users).set(body).where(eq(users.id, id)).returning();
+  const values = {
+    ...body,
+    updatedAt: new Date(),
+  };
+  const [updated] = await db.update(users).set(values).where(eq(users.id, id)).returning();
   if (!updated) return res.status(404).json({ error: "User not found" });
   res.json(updated);
+}));
+
+api.patch("/users/me/profile", asyncRoute(async (req, res) => {
+  const body = z.object({
+    name: z.string().min(2).optional(),
+    email: z.email().optional(),
+    image: z.string().nullable().optional(),
+  }).parse(req.body);
+  const id = req.appUser!.id;
+  const [updated] = await db.update(users).set({
+    ...body,
+    updatedAt: new Date(),
+  }).where(eq(users.id, id)).returning();
+  if (!updated) return res.status(404).json({ error: "User not found" });
+  res.json({ user: updated });
+}));
+
+api.post("/users/image", asyncRoute(async (req, res) => {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+  const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+  if (!cloudName || !apiKey || !apiSecret) {
+    return res.status(503).json({ error: "Cloudinary is not configured" });
+  }
+
+  const body = z.object({
+    dataUrl: z.string(),
+    fileName: z.string().optional(),
+  }).parse(req.body);
+  const match = body.dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
+  if (!match) return res.status(400).json({ error: "Invalid image data" });
+
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: "Image must be 5 MB or smaller" });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = "lab-manager/user-images";
+  const signature = createHash("sha1")
+    .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
+    .digest("hex");
+  const uploadUrl = process.env.CLOUDINARY_UPLOAD_URL?.trim()
+    || `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+  const uploadData = new FormData();
+  uploadData.append("file", new Blob([buffer], { type: match[1] }), body.fileName || "user-image");
+  uploadData.append("api_key", apiKey);
+  uploadData.append("timestamp", String(timestamp));
+  uploadData.append("signature", signature);
+  uploadData.append("folder", folder);
+
+  const uploadResponse = await fetchWithTimeout(uploadUrl, { method: "POST", body: uploadData });
+  const uploaded = await uploadResponse.json().catch(() => null) as {
+    secure_url?: string;
+    error?: { message?: string };
+  } | null;
+  if (!uploadResponse.ok || !uploaded?.secure_url) {
+    return res.status(502).json({ error: uploaded?.error?.message || "Unable to upload image" });
+  }
+  res.json({ secureUrl: uploaded.secure_url });
 }));
 
 api.get("/facilities", asyncRoute(async (req, res) => {
