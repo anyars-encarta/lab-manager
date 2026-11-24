@@ -539,7 +539,7 @@ export function LaboratoryWorkspace({ section }: Props) {
           ].includes(section) && (
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
-                <Button className="gap-2">
+                <Button className="gap-2 cursor-pointer">
                   <Plus className="h-4 w-4" />
                   {section === "claims"
                     ? "Generate claim"
@@ -556,7 +556,11 @@ export function LaboratoryWorkspace({ section }: Props) {
                       }`}
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+              <DialogContent 
+              className="max-h-[90vh] overflow-y-auto sm:max-w-xl"
+              onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+              >
                 <form onSubmit={submit}>
                   <DialogHeader>
                     <DialogTitle>
@@ -703,7 +707,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       {loadError && (
         <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
           <span>{loadError}</span>
-          <Button size="sm" variant="outline" onClick={() => void load()}>
+          <Button size="sm" variant="outline" className="cursor-pointer" onClick={() => void load()}>
             Retry
           </Button>
         </div>
@@ -764,7 +768,11 @@ export function LaboratoryWorkspace({ section }: Props) {
           }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent 
+        className="sm:max-w-md"
+        onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Receive payment</DialogTitle>
             <DialogDescription>

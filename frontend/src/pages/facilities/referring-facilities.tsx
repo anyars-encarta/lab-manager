@@ -187,11 +187,15 @@ export function ReferringFacilitiesPage() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="gap-2" onClick={openCreate}>
+            <Button className="gap-2 cursor-pointer" onClick={openCreate}>
               <Plus className="h-4 w-4" />Add facility
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
+          <DialogContent 
+          className="max-h-[92vh] overflow-y-auto sm:max-w-xl"
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          >
             <form onSubmit={submit}>
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit referring facility" : "Add referring facility"}</DialogTitle>

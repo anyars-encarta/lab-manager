@@ -795,7 +795,11 @@ export function InvestigationsPage({
       </Tabs>
 
       <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
+        <DialogContent 
+        className="max-h-[92vh] overflow-y-auto sm:max-w-xl"
+        onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <form onSubmit={saveTest}>
             <DialogHeader>
               <DialogTitle>
@@ -890,7 +894,11 @@ export function InvestigationsPage({
       </Dialog>
 
       <Dialog open={parameterDialogOpen} onOpenChange={setParameterDialogOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-xl">
+        <DialogContent 
+        className="max-h-[92vh] overflow-y-auto sm:max-w-xl"
+        onInteractOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <form onSubmit={saveParameter}>
             <DialogHeader>
               <DialogTitle>
