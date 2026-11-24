@@ -30,7 +30,7 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
 const numberValue = (value: unknown) => Number(value ?? 0);
 const investigationCharge = (item: typeof investigations.$inferSelect) =>
   item.covered
-    ? numberValue(item.coveredTariff) + numberValue(item.topUp)
+    ? numberValue(item.topUp)
     : numberValue(item.uncoveredTariff);
 const calendarAge = (birthDate: Date, at: Date = new Date()) => {
   const today = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
@@ -190,9 +190,7 @@ api.post("/investigations", requireRole("admin"), asyncRoute(async (req, res) =>
     coveredTariff: (body.coveredTariff ?? 0).toFixed(2),
     uncoveredTariff: (body.uncoveredTariff ?? 0).toFixed(2),
     topUp: (body.topUp ?? 0).toFixed(2),
-    price: body.coveredTariff != null
-      ? (body.coveredTariff + (body.topUp ?? 0)).toFixed(2)
-      : "0.00",
+    price: (body.topUp ?? 0).toFixed(2),
     category: "investigation",
     covered: body.covered ?? true,
   }).returning();
@@ -223,9 +221,8 @@ api.patch("/investigations/:id", requireRole("admin"), asyncRoute(async (req, re
   };
   if (body.coveredTariff != null || body.topUp != null) {
     const existing = await db.query.investigations.findFirst({ where: eq(investigations.id, id) });
-    const coveredTariff = body.coveredTariff ?? numberValue(existing?.coveredTariff);
     const topUp = body.topUp ?? numberValue(existing?.topUp);
-    Object.assign(values, { price: (coveredTariff + topUp).toFixed(2) });
+    Object.assign(values, { price: topUp.toFixed(2) });
   }
   const [updated] = await db.update(investigations).set(values).where(eq(investigations.id, id)).returning();
   if (!updated) return res.status(404).json({ error: "Investigation not found" });

@@ -356,10 +356,10 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
           <h1 className="flex items-center gap-2 text-3xl font-semibold tracking-tight"><Microscope className="h-7 w-7" />Investigations</h1>
           <p className="mt-1 text-sm text-muted-foreground">Register laboratory tests, pricing and result parameters.</p>
         </div>
-        {canWrite && <Button className="gap-2" onClick={() => openTestDialog()}><Plus className="h-4 w-4" />Add investigation</Button>}
+        {canWrite && <Button className="gap-2 cursor-pointer" onClick={() => openTestDialog()}><Plus className="h-4 w-4 cursor-pointer" />Add investigation</Button>}
       </section>
 
-      {loadError && <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm"><span>{loadError}</span><Button size="sm" variant="outline" onClick={() => void load()}>Retry</Button></div>}
+      {loadError && <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm"><span>{loadError}</span><Button size="sm" variant="outline" className="cursor-pointer" onClick={() => void load()}>Retry</Button></div>}
 
       <Tabs defaultValue="tests">
         <TabsList><TabsTrigger value="tests">Investigations</TabsTrigger><TabsTrigger value="parameters">Parameters</TabsTrigger></TabsList>
@@ -385,7 +385,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                       <TableCell>GH₵ {Number(test.uncoveredTariff ?? 0).toFixed(2)}</TableCell>
                       <TableCell><Badge variant={test.covered ? "default" : "secondary"}>{test.covered ? "Covered" : "Not covered"}</Badge></TableCell>
                       <TableCell><Badge variant={test.active ? "default" : "secondary"}>{test.active ? "Active" : "Inactive"}</Badge></TableCell>
-                      {canWrite && <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>}
+                      {canWrite && <TableCell className="text-right"><Button size="sm" variant="ghost" className="cursor-pointer" onClick={() => openTestDialog(test)}>Edit</Button></TableCell>}
                     </TableRow>
                   ))}</TableBody>
                 </Table>
@@ -423,7 +423,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                       setSelectedTestId(investigationId);
                     }}
                   />
-                  {canWrite && <Button disabled={!selectedTestId} className="gap-2" onClick={() => openParameterDialog()}><Plus className="h-4 w-4" />Add parameter</Button>}
+                  {canWrite && <Button disabled={!selectedTestId} className="gap-2 cursor-pointer" onClick={() => openParameterDialog()}><Plus className="h-4 w-4" />Add parameter</Button>}
                 </div>
               </div>
             </CardHeader>
@@ -439,7 +439,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                       <TableCell>{parameter.referenceRange || "—"}</TableCell>
                       <TableCell>{parameter.referenceLow != null && parameter.referenceHigh != null ? `${parameter.referenceLow} — ${parameter.referenceHigh}` : "—"}</TableCell>
                       <TableCell><Badge variant="outline">{parameter.dataType}</Badge></TableCell>
-                      {canWrite && <TableCell><Button size="sm" variant="ghost" onClick={() => openParameterDialog(parameter)}><Settings2 className="mr-1 h-4 w-4" />Edit</Button></TableCell>}
+                      {canWrite && <TableCell><Button size="sm" variant="ghost" className="cursor-pointer" onClick={() => openParameterDialog(parameter)}><Settings2 className="mr-1 h-4 w-4 cursor-pointer" />Edit</Button></TableCell>}
                     </TableRow>
                   ))}</TableBody>
                 </Table>
@@ -473,7 +473,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
               </div>
             </div>
             {submissionError && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{submissionError}</p>}
-            <DialogFooter><Button type="button" variant="outline" onClick={() => setTestDialogOpen(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save investigation"}</Button></DialogFooter>
+            <DialogFooter><Button type="button" variant="outline" className="cursor-pointer" onClick={() => setTestDialogOpen(false)}>Cancel</Button><Button type="submit" className="cursor-pointer" disabled={saving}>{saving ? "Saving..." : "Save investigation"}</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
@@ -520,7 +520,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                           description: error instanceof Error ? error.message : "An unexpected error occurred.",
                         });
                       }
-                    }} aria-label="Delete reference profile"><Trash2 className="h-4 w-4 text-destructive" /></Button>}
+                    }} aria-label="Delete reference profile"><Trash2 className="h-4 w-4 text-destructive cursor-pointer" /></Button>}
                   </div>
                 ))}
                 <div className="grid grid-cols-2 gap-3">
@@ -533,7 +533,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
                   <Field name="profileLow" label="Low" type="number" step="0.0001" defaultValue={profileDraft.referenceLow} />
                   <Field name="profileHigh" label="High" type="number" step="0.0001" defaultValue={profileDraft.referenceHigh} />
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => {
+                <Button type="button" variant="outline" size="sm" className="cursor-pointer" onClick={() => {
                   setProfileDraft((current) => ({
                     gender: current.gender,
                     ageMin: (document.querySelector<HTMLInputElement>('[name="profileAgeMin"]')?.value || "0"),
@@ -547,7 +547,7 @@ export function InvestigationsPage({ canWrite = false }: { canWrite?: boolean })
               <div className="flex items-center justify-between rounded-md border p-3"><div><Label htmlFor="parameter-active">Active parameter</Label><p className="text-xs text-muted-foreground">Inactive parameters are hidden from result entry.</p></div><Switch id="parameter-active" checked={parameterActive} onCheckedChange={setParameterActive} /></div>
             </div>
             {submissionError && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{submissionError}</p>}
-            <DialogFooter><Button type="button" variant="outline" onClick={() => setParameterDialogOpen(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save parameter"}</Button></DialogFooter>
+            <DialogFooter><Button type="button" variant="outline" className="cursor-pointer" onClick={() => setParameterDialogOpen(false)}>Cancel</Button><Button type="submit" className="cursor-pointer" disabled={saving}>{saving ? "Saving..." : "Save parameter"}</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

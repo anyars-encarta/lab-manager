@@ -274,6 +274,19 @@ async function seed() {
       where: eq(investigations.code, code),
     });
     if (existing) {
+      const legacyPrice = Number(existing.price || 0);
+      if (
+        Number(existing.coveredTariff || 0) === 0 &&
+        Number(existing.uncoveredTariff || 0) === 0 &&
+        Number(existing.topUp || 0) === 0 &&
+        legacyPrice !== 0
+      ) {
+        await db.update(investigations).set({
+          coveredTariff: "0.00",
+          uncoveredTariff: existing.covered ? "0.00" : legacyPrice.toFixed(2),
+          topUp: existing.covered ? legacyPrice.toFixed(2) : "0.00",
+        }).where(eq(investigations.id, existing.id));
+      }
       existingCount += 1;
       continue;
     }

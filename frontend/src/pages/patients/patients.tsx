@@ -89,7 +89,7 @@ type Patient = {
 
 function getInvestigationCharge(test: Investigation) {
   return test.covered
-    ? Number(test.coveredTariff || 0) + Number(test.topUp || 0)
+    ? Number(test.topUp || 0)
     : Number(test.uncoveredTariff || 0);
 }
 
@@ -516,7 +516,7 @@ export function PatientsPage() {
           }}
         >
           <DialogTrigger asChild>
-            <Button className="gap-2">
+            <Button className="gap-2 cursor-pointer">
               <Plus className="h-4 w-4" />
               New patient / request
             </Button>
@@ -540,6 +540,7 @@ export function PatientsPage() {
                   type="button"
                   size="sm"
                   variant={patientMode === "existing" ? "default" : "ghost"}
+                  className="cursor-pointer"
                   onClick={() => {
                     setPatientMode("existing");
                     setSelectedExistingPatientId("");
@@ -552,6 +553,7 @@ export function PatientsPage() {
                   type="button"
                   size="sm"
                   variant={patientMode === "new" ? "default" : "ghost"}
+                  className="cursor-pointer"
                   onClick={() => {
                     setPatientMode("new");
                     setSelectedExistingPatientId("");
@@ -732,11 +734,12 @@ export function PatientsPage() {
                 <Button
                   type="button"
                   variant="outline"
+                  className="cursor-pointer"
                   onClick={closeRegistrationDialog}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={saving}>
+                <Button type="submit" disabled={saving} className="cursor-pointer">
                   {saving
                     ? "Processing..."
                     : patientMode === "existing"
@@ -763,7 +766,7 @@ export function PatientsPage() {
               GH₵ {Number(success.totalAmount).toFixed(2)}
             </p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setSuccess(null)}>
+          <Button size="sm" variant="outline" className="cursor-pointer" onClick={() => setSuccess(null)}>
             Dismiss
           </Button>
         </div>
@@ -879,6 +882,7 @@ export function PatientsPage() {
               <Button
                 type="button"
                 variant="outline"
+                className="cursor-pointer"
                 onClick={() => {
                   requestDialogGeneration.current += 1;
                   setRequestDialogOpen(false);
@@ -889,7 +893,7 @@ export function PatientsPage() {
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving} className="cursor-pointer">
                 {saving ? "Creating request..." : "Create laboratory request"}
               </Button>
             </DialogFooter>
@@ -963,6 +967,7 @@ export function PatientsPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        className="cursor-pointer"
                         onClick={() => openExistingRequest(patient)}
                       >
                         Request tests
