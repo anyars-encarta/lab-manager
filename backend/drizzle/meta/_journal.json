@@ -8,6 +8,41 @@
       "when": 1795098342226,
       "tag": "0000_soft_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795183496617,
+      "tag": "0001_cynical_mesmero",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795185687075,
+      "tag": "0002_parched_newton_destine",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795422437175,
+      "tag": "0003_small_silhouette",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795431471732,
+      "tag": "0004_futuristic_stone_men",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795455213316,
+      "tag": "0005_friendly_ultimates",
+      "breakpoints": true
     }
   ]
 }

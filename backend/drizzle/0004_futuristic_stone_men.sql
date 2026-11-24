@@ -1,0 +1,1 @@
+ALTER TABLE "investigations" ADD COLUMN "covered" boolean DEFAULT true NOT NULL;

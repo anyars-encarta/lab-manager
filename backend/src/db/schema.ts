@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -136,12 +137,17 @@ export const patients = pgTable("patients", {
 export const investigations = pgTable("investigations", {
   id: uuid("id").primaryKey().defaultRandom(),
   code: varchar("code", { length: 50 }).notNull(),
+  gdrgCode: varchar("gdrg_code", { length: 50 }),
   name: varchar("name", { length: 200 }).notNull(),
   category: varchar("category", { length: 100 }),
   specimenType: varchar("specimen_type", { length: 100 }),
   price: numeric("price", { precision: 12, scale: 2 }).notNull().default("0"),
+  coveredTariff: numeric("covered_tariff", { precision: 12, scale: 2 }).notNull().default("0"),
+  uncoveredTariff: numeric("uncovered_tariff", { precision: 12, scale: 2 }).notNull().default("0"),
+  topUp: numeric("top_up", { precision: 12, scale: 2 }).notNull().default("0"),
   nhiaCode: varchar("nhia_code", { length: 100 }),
   active: boolean("active").notNull().default(true),
+  covered: boolean("covered").notNull().default(true),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -156,11 +162,30 @@ export const parameters = pgTable("parameters", {
   name: varchar("name", { length: 200 }).notNull(),
   unit: varchar("unit", { length: 50 }),
   referenceRange: text("reference_range"),
+  referenceLow: numeric("reference_low", { precision: 12, scale: 4 }),
+  referenceHigh: numeric("reference_high", { precision: 12, scale: 4 }),
   dataType: varchar("data_type", { length: 30 }).notNull().default("text"),
   decimalPlaces: integer("decimal_places").notNull().default(0),
   sortOrder: integer("sort_order").notNull().default(0),
   active: boolean("active").notNull().default(true),
-});
+}, (table) => [
+  check("parameters_reference_bounds_check", sql`(${table.referenceLow} is null or ${table.referenceHigh} is null or ${table.referenceLow} <= ${table.referenceHigh})`),
+]);
+
+export const parameterReferenceRanges = pgTable("parameter_reference_ranges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  parameterId: uuid("parameter_id").notNull().references(() => parameters.id, { onDelete: "cascade" }),
+  gender: varchar("gender", { length: 30 }).notNull().default("all"),
+  ageMin: integer("age_min").notNull().default(0),
+  ageMax: integer("age_max"),
+  referenceLow: numeric("reference_low", { precision: 12, scale: 4 }),
+  referenceHigh: numeric("reference_high", { precision: 12, scale: 4 }),
+  referenceRange: text("reference_range"),
+  sortOrder: integer("sort_order").notNull().default(0),
+}, (table) => [
+  check("reference_ranges_age_check", sql`${table.ageMin} >= 0 and (${table.ageMax} is null or ${table.ageMax} >= ${table.ageMin})`),
+  check("reference_ranges_bounds_check", sql`(${table.referenceLow} is null or ${table.referenceHigh} is null or ${table.referenceLow} <= ${table.referenceHigh})`),
+]);
 
 export const labOrders = pgTable("lab_orders", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -199,6 +224,8 @@ export const resultEntries = pgTable("result_entries", {
   parameterId: uuid("parameter_id").notNull().references(() => parameters.id),
   value: text("value").notNull(),
   abnormalFlag: varchar("abnormal_flag", { length: 30 }),
+  referenceLow: numeric("reference_low", { precision: 12, scale: 4 }),
+  referenceHigh: numeric("reference_high", { precision: 12, scale: 4 }),
   remarks: text("remarks"),
   enteredBy: text("entered_by").notNull().references(() => users.id),
   verifiedBy: text("verified_by").references(() => users.id),

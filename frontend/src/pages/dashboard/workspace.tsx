@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -91,17 +92,30 @@ export function LaboratoryWorkspace({ section }: Props) {
       if (section === "orders") {
         try {
           const [investigationResponse, patientResponse] = await Promise.all([
-            fetch(`${API_URL}/api/investigations`, { credentials: "include" }),
+                (async () => {
+                  const investigations: any[] = [];
+                  let page = 1;
+                  while (true) {
+                    const response = await fetch(`${API_URL}/api/investigations?page=${page}&pageSize=100`, { credentials: "include" });
+                    if (!response.ok) throw new Error("Unable to load investigations");
+                    const payload = await response.json();
+                    const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
+                    investigations.push(...rows);
+                    if (rows.length === 0 || investigations.length >= Number(payload.total || investigations.length)) break;
+                    page += 1;
+                  }
+                  return investigations;
+                })(),
             fetch(`${API_URL}/api/patients`, { credentials: "include" }),
           ]);
-          if (!investigationResponse.ok) throw new Error("Unable to load investigations");
           if (!patientResponse.ok) throw new Error("Unable to load patients");
-          const [investigationsData, patientsData] = await Promise.all([
-            investigationResponse.json(),
-            patientResponse.json(),
-          ]);
+              const [investigationsData, patientsData] = await Promise.all([investigationResponse, patientResponse.json()]);
           if (generation === requestGeneration.current) {
-            setInvestigations(Array.isArray(investigationsData) ? investigationsData : []);
+            setInvestigations(
+              Array.isArray(investigationsData)
+                ? investigationsData
+                : [],
+            );
             setPatients(Array.isArray(patientsData) ? patientsData : []);
           }
         } catch (error) {
@@ -151,6 +165,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         };
         const response = await fetch(`${API_URL}/api/orders`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to create order");
+        toast.success("Laboratory request created", { description: "The investigation request and charges were saved." });
       } else if (section === "reports") {
         reportGeneration = ++requestGeneration.current;
         setLoading(true);
@@ -162,25 +177,38 @@ export function LaboratoryWorkspace({ section }: Props) {
           setRows([report]);
           setLoading(false);
           setMessage("Report generated successfully");
+          toast.success("Laboratory report generated", { description: "The selected reporting period is ready." });
           setDialogOpen(false);
         }
         return;
       } else if (section === "claims") {
         const response = await fetch(`${API_URL}/api/nhia/claims`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ facilityId: values.facilityId, claimPeriodStart: new Date(`${values.from}T00:00:00Z`).toISOString(), claimPeriodEnd: new Date(`${values.to}T23:59:59Z`).toISOString() }) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to generate claim");
+        toast.success("NHIA claim generated", { description: "The claim was created for the selected period." });
       } else {
         const path = pathMap[section];
         if (!path) return;
         let payload: Record<string, unknown> = values;
         if (section === "users") payload = { name: values.name, email: values.email, password: values.password, role: values.role };
-        if (section === "investigations") payload = { ...values, price: Number(values.price) };
+        if (section === "investigations") payload = {
+          ...values,
+          coveredTariff: Number(values.coveredTariff || 0),
+          uncoveredTariff: Number(values.uncoveredTariff || 0),
+          topUp: Number(values.topUp || 0),
+        };
         const response = await fetch(`${API_URL}${path}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) throw new Error((await response.json()).error || "Unable to save record");
+        toast.success(section === "users" ? "User account created" : "Setup record saved", {
+          description: section === "users" ? "The new account and role were saved." : "The setup information was saved successfully.",
+        });
       }
       setMessage("Saved successfully");
       setDialogOpen(false);
       await load();
     } catch (error) {
+      toast.error("Unable to complete operation", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
       if (reportGeneration === null || reportGeneration === requestGeneration.current) {
         setSubmissionError(error instanceof Error ? error.message : "Unable to save record");
       }
@@ -225,7 +253,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                     <RoleField />
                   </>}
                   {section === "facilities" && <><Field name="name" label="Facility name" required /><Field name="code" label="Facility code" /><Field name="address" label="Address" /><Field name="phone" label="Phone" /><Field name="nhiaFacilityCode" label="NHIA facility code" /></>}
-                  {section === "investigations" && <><FacilityField facilities={facilities} /><Field name="code" label="Test code" required /><Field name="name" label="Investigation name" required /><Field name="category" label="Category" /><Field name="specimenType" label="Specimen type" /><Field name="price" label="Price (GH₵)" type="number" step="0.01" required /><Field name="nhiaCode" label="NHIA code" /></>}
+                  {section === "investigations" && <><Field name="gdrgCode" label="G-DRG code" /><Field name="name" label="Investigation name" required /><Field name="specimenType" label="Specimen type" /><div className="grid grid-cols-3 gap-3"><Field name="coveredTariff" label="Covered tariff" type="number" step="0.01" /><Field name="topUp" label="Top-up" type="number" step="0.01" /><Field name="uncoveredTariff" label="Uncovered tariff" type="number" step="0.01" /></div></>}
                   {section === "orders" && <><FacilityField facilities={facilities} /><PatientField patients={patients} /><Field name="clinicianName" label="Clinician" /><InvestigationField investigations={investigations} /></>}
                   {(section === "claims" || section === "reports") && <><FacilityField facilities={facilities} /><div className="grid grid-cols-2 gap-3"><Field name="from" label="From" type="date" required /><Field name="to" label="To" type="date" required /></div></>}
                 </div>
@@ -274,7 +302,12 @@ function PatientField({ patients }: { patients: any[] }) {
 }
 
 function InvestigationField({ investigations }: { investigations: any[] }) {
-  return <div className="space-y-2"><Label htmlFor="investigationIds">Investigations</Label><Select name="investigationIds" required><SelectTrigger id="investigationIds"><SelectValue placeholder="Select investigation" /></SelectTrigger><SelectContent>{investigations.map((item) => <SelectItem key={item.id} value={item.id}>{item.name} — GH₵ {item.price}</SelectItem>)}</SelectContent></Select></div>;
+  return <div className="space-y-2"><Label htmlFor="investigationIds">Investigations</Label><Select name="investigationIds" required><SelectTrigger id="investigationIds"><SelectValue placeholder="Select investigation" /></SelectTrigger><SelectContent>{investigations.map((item) => {
+    const charge = item.covered
+      ? Number(item.topUp || 0)
+      : Number(item.uncoveredTariff || 0);
+    return <SelectItem key={item.id} value={item.id}>{item.name} — GH₵ {charge.toFixed(2)}</SelectItem>;
+  })}</SelectContent></Select></div>;
 }
 
 function RecordTable({ section, rows }: { section: Props["section"]; rows: any[] }) {
@@ -282,7 +315,7 @@ function RecordTable({ section, rows }: { section: Props["section"]; rows: any[]
   const columns: Record<Props["section"], string[]> = {
     patients: ["patientNumber", "name", "phone", "nhisNumber", "createdAt"],
     orders: ["orderNumber", "status", "paymentStatus", "totalAmount", "createdAt"],
-    investigations: ["code", "name", "category", "specimenType", "price", "active"],
+    investigations: ["gdrgCode", "name", "specimenType", "coveredTariff", "topUp", "uncoveredTariff", "covered", "active"],
     facilities: ["name", "code", "phone", "nhiaFacilityCode"],
     users: ["name", "email", "role", "active"],
     claims: ["claimNumber", "status", "totalAmount", "claimPeriodStart", "claimPeriodEnd"],
