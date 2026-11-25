@@ -173,26 +173,6 @@ export function InvestigationsPage({
         Array.isArray(investigationData.data) ? investigationData.data : [],
       );
       setTotal(Number(investigationData.total || 0));
-      if (search.trim() === "") {
-        setInvestigationOptions((current) => {
-          const pageRows = Array.isArray(investigationData.data)
-            ? investigationData.data
-            : [];
-          const selected = pageRows.find(
-            (row: Investigation) => row.id === selectedTestIdRef.current,
-          );
-          return selected
-            ? Array.from(
-                new Map(
-                  [...current, ...pageRows].map((row: Investigation) => [
-                    row.id,
-                    row,
-                  ]),
-                ).values(),
-              )
-            : pageRows;
-        });
-      }
       if (selectedTestId) await loadParameters(selectedTestId, generation);
     } catch (error) {
       if (generation === requestGeneration.current)
@@ -239,22 +219,30 @@ export function InvestigationsPage({
   };
 
   useEffect(() => {
-    void fetch(`${API_URL}/api/investigations?page=1&pageSize=1000`, {
-      credentials: "include",
-    })
-      .then(async (response) => {
-        if (!response.ok)
-          throw new Error("Unable to load investigation options");
-        const data = await response.json();
-        setInvestigationOptions(
-          Array.isArray(data.data)
-            ? data.data
-            : Array.isArray(data)
-            ? data
-            : [],
+    const loadAllInvestigationOptions = async () => {
+      const allOptions: Investigation[] = [];
+      let pageNumber = 1;
+      while (true) {
+        const response = await fetch(
+          `${API_URL}/api/investigations?page=${pageNumber}&pageSize=100`,
+          { credentials: "include" },
         );
-      })
-      .catch(() => setInvestigationOptions((current) => current));
+        if (!response.ok) {
+          throw new Error("Unable to load investigation options");
+        }
+        const data = await response.json();
+        const rows = Array.isArray(data.data) ? data.data : [];
+        allOptions.push(...rows);
+        if (rows.length === 0 || allOptions.length >= Number(data.total || allOptions.length)) {
+          break;
+        }
+        pageNumber += 1;
+      }
+      setInvestigationOptions(allOptions);
+    };
+    void loadAllInvestigationOptions().catch(() =>
+      setInvestigationOptions((current) => current),
+    );
   }, []);
 
   useEffect(() => {

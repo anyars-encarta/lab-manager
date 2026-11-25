@@ -639,7 +639,6 @@ export function LaboratoryWorkspace({ section }: Props) {
         .filter((parameter: any) => parameter.active)
         .map((parameter: any) => ({
           parameterId: parameter.id,
-          ...resultDraft[`${item.id}:${parameter.id}`],
           value: resultDraft[`${item.id}:${parameter.id}`]?.value || "",
           remarks: resultDraft[`${item.id}:${parameter.id}`]?.remarks || "",
         }));
@@ -1079,6 +1078,26 @@ export function LaboratoryWorkspace({ section }: Props) {
                   {(item.parameters || []).filter((parameter: any) => parameter.active).map((parameter: any) => {
                     const key = `${item.id}:${parameter.id}`;
                     const draft = resultDraft[key] || { value: "", remarks: "" };
+                    const numericValue = Number(draft.value);
+                    const hasNumericValue =
+                      parameter.dataType === "number" &&
+                      draft.value.trim() !== "" &&
+                      Number.isFinite(numericValue);
+                    const low = parameter.referenceLow == null
+                      ? null
+                      : Number(parameter.referenceLow);
+                    const high = parameter.referenceHigh == null
+                      ? null
+                      : Number(parameter.referenceHigh);
+                    const generatedFlag = hasNumericValue
+                      ? low != null && numericValue < low
+                        ? "low"
+                        : high != null && numericValue > high
+                          ? "high"
+                          : low != null || high != null
+                            ? "normal"
+                            : ""
+                      : "";
                     return (
                       <div key={parameter.id} className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_180px_1fr]">
                         <div className="space-y-2">
@@ -1097,24 +1116,20 @@ export function LaboratoryWorkspace({ section }: Props) {
                         </div>
                         <div className="space-y-2">
                           <Label>Flag</Label>
-                          <Select
-                            value={draft.abnormalFlag || "normal"}
-                            onValueChange={(value) => setResultDraft((current) => ({
-                              ...current,
-                              [key]: {
-                                ...draft,
-                                abnormalFlag: value as "normal" | "high" | "low" | "critical",
-                              },
-                            }))}
-                          >
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="normal">Normal</SelectItem>
-                              <SelectItem value="high">High</SelectItem>
-                              <SelectItem value="low">Low</SelectItem>
-                              <SelectItem value="critical">Critical</SelectItem>
-                            </SelectContent>
-                          </Select>
+                          {generatedFlag ? (
+                            <Badge
+                              variant={generatedFlag === "normal" ? "secondary" : "destructive"}
+                              className="mt-1"
+                            >
+                              {generatedFlag === "high"
+                                ? "H - High"
+                                : generatedFlag === "low"
+                                  ? "L - Low"
+                                  : "Normal"}
+                            </Badge>
+                          ) : (
+                            <p className="mt-2 text-xs text-muted-foreground">Calculated from bounds</p>
+                          )}
                         </div>
                         <div className="space-y-2">
                           <Label>Remarks</Label>

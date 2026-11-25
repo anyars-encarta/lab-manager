@@ -1072,21 +1072,19 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
           return genderMatches && ageMatches;
         }) ?? null;
       }
-      if (parameter?.dataType === "number" && matchedRange && result.abnormalFlag == null && Number.isFinite(numericValue)) {
+      if (parameter?.dataType === "number" && matchedRange && Number.isFinite(numericValue)) {
         referenceLow = matchedRange.referenceLow;
         referenceHigh = matchedRange.referenceHigh;
         if (referenceLow != null && numericValue < Number(referenceLow)) abnormalFlag = "low";
         else if (referenceHigh != null && numericValue > Number(referenceHigh)) abnormalFlag = "high";
         else if (referenceLow != null || referenceHigh != null) abnormalFlag = "normal";
-      } else if (parameter?.dataType === "number" && result.abnormalFlag == null && Number.isFinite(numericValue) &&
-                 parameter.referenceLow != null && parameter.referenceHigh != null) {
+      } else if (parameter?.dataType === "number" && Number.isFinite(numericValue) &&
+                 (parameter.referenceLow != null || parameter.referenceHigh != null)) {
         referenceLow = parameter.referenceLow;
         referenceHigh = parameter.referenceHigh;
-        abnormalFlag = numericValue < Number(referenceLow)
-          ? "low"
-          : numericValue > Number(referenceHigh)
-            ? "high"
-            : "normal";
+        if (referenceLow != null && numericValue < Number(referenceLow)) abnormalFlag = "low";
+        else if (referenceHigh != null && numericValue > Number(referenceHigh)) abnormalFlag = "high";
+        else abnormalFlag = "normal";
       }
       return {
         orderItemId: itemId,
