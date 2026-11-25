@@ -1143,7 +1143,7 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
       return {
         orderItemId: itemId,
         parameterId: result.parameterId,
-        value: result.value,
+        value: trimmedValue,
         abnormalFlag,
         referenceLow,
         referenceHigh,

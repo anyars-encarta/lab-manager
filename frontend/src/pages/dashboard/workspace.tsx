@@ -699,7 +699,7 @@ export function LaboratoryWorkspace({ section }: Props) {
           (result: any) => result.parameterId === parameter.id,
         );
         return !draft ||
-          draft.value !== (persisted?.value || "") ||
+          draft.value.trim() !== (persisted?.value || "").trim() ||
           draft.remarks !== (persisted?.remarks || "");
       }),
     );

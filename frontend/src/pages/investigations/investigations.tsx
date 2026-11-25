@@ -147,6 +147,9 @@ export function InvestigationsPage({
   const selectedTestIdRef = useRef("");
   const profileSessionGeneration = useRef(0);
   const savedParameterIdRef = useRef<string | null>(null);
+  const investigationOptionsLoadGeneration = useRef(0);
+  const [investigationOptionsLoadError, setInvestigationOptionsLoadError] =
+    useState("");
 
   const load = async (
     loadPage = page,
@@ -220,6 +223,8 @@ export function InvestigationsPage({
   };
 
   const loadAllInvestigationOptions = async () => {
+    const generation = ++investigationOptionsLoadGeneration.current;
+    setInvestigationOptionsLoadError("");
     const allOptions: Investigation[] = [];
     let pageNumber = 1;
     while (true) {
@@ -241,13 +246,19 @@ export function InvestigationsPage({
       }
       pageNumber += 1;
     }
-    setInvestigationOptions(allOptions);
+    if (generation === investigationOptionsLoadGeneration.current) {
+      setInvestigationOptions(allOptions);
+    }
   };
 
   useEffect(() => {
-    void loadAllInvestigationOptions().catch(() =>
-      setInvestigationOptions((current) => current),
-    );
+    void loadAllInvestigationOptions().catch((error) => {
+      setInvestigationOptionsLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to refresh investigation options",
+      );
+    });
   }, []);
 
   useEffect(() => {
@@ -382,7 +393,18 @@ export function InvestigationsPage({
       );
       setTestDialogOpen(false);
       await load();
-      await loadAllInvestigationOptions();
+      try {
+        await loadAllInvestigationOptions();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unable to refresh investigation options";
+        setInvestigationOptionsLoadError(message);
+        toast.error("Investigation saved", {
+          description: `${message}. Use Retry options to refresh the dropdown.`,
+        });
+      }
     } catch (error) {
       toast.error("Unable to save investigation", {
         description:
@@ -458,7 +480,13 @@ export function InvestigationsPage({
       const profileAgeMax = String(values.profileAgeMax || "").trim();
       const profileLow = String(values.profileLow || "").trim();
       const profileHigh = String(values.profileHigh || "").trim();
-      if (savedParameterId && (profileRange || profileLow || profileHigh)) {
+      if (
+        savedParameterId &&
+        (editingProfileId != null ||
+          profileRange ||
+          profileLow ||
+          profileHigh)
+      ) {
         if (parameterSession !== profileSessionGeneration.current) return;
         const submittedProfile = {
           gender: profileDraft.gender,
@@ -723,6 +751,24 @@ export function InvestigationsPage({
                       setSelectedTestId(investigationId);
                     }}
                   />
+                  {investigationOptionsLoadError && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="cursor-pointer"
+                      onClick={() => {
+                        void loadAllInvestigationOptions().catch((error) =>
+                          setInvestigationOptionsLoadError(
+                            error instanceof Error
+                              ? error.message
+                              : "Unable to refresh investigation options",
+                          ),
+                        );
+                      }}
+                    >
+                      Retry options
+                    </Button>
+                  )}
                   {canWrite && (
                     <Button
                       disabled={!selectedTestId}
@@ -1037,6 +1083,8 @@ export function InvestigationsPage({
                           size="sm"
                           variant="ghost"
                           onClick={async () => {
+                            const deletionProfileSession =
+                              profileSessionGeneration.current;
                             try {
                               const response = await fetch(
                                 `${API_URL}/api/parameter-reference-ranges/${profile.id}`,
@@ -1049,17 +1097,24 @@ export function InvestigationsPage({
                               setReferenceProfiles((current) =>
                                 current.filter((item) => item.id !== profile.id),
                               );
-                              if (editingProfileId === profile.id) {
-                                setEditingProfileId(null);
-                                setProfileDraft({
-                                  gender: "all",
-                                  ageMin: "0",
-                                  ageMax: "",
-                                  referenceRange: "",
-                                  referenceLow: "",
-                                  referenceHigh: "",
-                                });
-                              }
+                              setEditingProfileId((current) => {
+                                if (
+                                  deletionProfileSession ===
+                                    profileSessionGeneration.current &&
+                                  current === profile.id
+                                ) {
+                                  setProfileDraft({
+                                    gender: "all",
+                                    ageMin: "0",
+                                    ageMax: "",
+                                    referenceRange: "",
+                                    referenceLow: "",
+                                    referenceHigh: "",
+                                  });
+                                  return null;
+                                }
+                                return current;
+                              });
                               toast.success("Reference profile deleted", {
                                 description:
                                   "The age/gender reference range was removed.",
