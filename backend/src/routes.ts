@@ -559,6 +559,18 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
     return res.status(400).json({ error: "Reference low value cannot exceed reference high value" });
   }
   const parameterId = String(req.params.id);
+  const existingRanges = await db.select().from(parameterReferenceRanges)
+    .where(eq(parameterReferenceRanges.parameterId, parameterId));
+  const exactMatch = existingRanges.find((range) =>
+    range.gender === body.gender &&
+    range.ageMin === body.ageMin &&
+    range.ageMax === (body.ageMax ?? null) &&
+    range.referenceRange === (body.referenceRange ?? null) &&
+    (range.referenceLow == null ? null : Number(range.referenceLow)) === (body.referenceLow ?? null) &&
+    (range.referenceHigh == null ? null : Number(range.referenceHigh)) === (body.referenceHigh ?? null) &&
+    range.sortOrder === body.sortOrder
+  );
+  if (exactMatch) return res.status(200).json(exactMatch);
   const transactionResult = await db.transaction(async (tx): Promise<"overlap" | Array<typeof parameterReferenceRanges.$inferSelect>> => {
     await tx.execute(sql`select "id" from "parameters" where "id" = ${parameterId} for update`);
     const ranges = await tx.select().from(parameterReferenceRanges)
@@ -813,8 +825,17 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
 api.get("/orders", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  const rows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
-  res.json(status ? rows.filter((row) => row.status === status) : rows);
+  const allRows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
+  const rows = status ? allRows.filter((row) => row.status === status) : allRows;
+  const patientIds = [...new Set(rows.map((row) => row.patientId))];
+  const patientRows = patientIds.length
+    ? await db.select().from(patients).where(sql`${patients.id} in ${patientIds}`)
+    : [];
+  const patientsById = new Map(patientRows.map((patient) => [patient.id, patient]));
+  res.json(rows.map((row) => ({
+    ...row,
+    patient: patientsById.get(row.patientId) || null,
+  })));
 }));
 
 api.get("/orders/:id", asyncRoute(async (req, res) => {
@@ -822,7 +843,57 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
   if (!order) return res.status(404).json({ error: "Order not found" });
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, order.patientId) });
-  res.json({ ...order, patient, items });
+  const detailedItems = await Promise.all(items.map(async (item) => {
+    const investigation = await db.query.investigations.findFirst({
+      where: eq(investigations.id, item.investigationId),
+    });
+    const itemParameters = investigation
+      ? await db.select().from(parameters)
+          .where(eq(parameters.investigationId, investigation.id))
+          .orderBy(asc(parameters.sortOrder), asc(parameters.name))
+      : [];
+    const parameterIds = itemParameters.map((parameter) => parameter.id);
+    const rangeRows = parameterIds.length
+      ? await db.select().from(parameterReferenceRanges)
+          .where(sql`${parameterReferenceRanges.parameterId} in ${parameterIds}`)
+          .orderBy(asc(parameterReferenceRanges.sortOrder), asc(parameterReferenceRanges.id))
+      : [];
+    const patientGender = patient?.gender?.toLowerCase();
+    const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
+    const parametersWithEffectiveBounds = itemParameters.map((parameter) => {
+      const ageMatchesProfile = (range: typeof parameterReferenceRanges.$inferSelect) => {
+        const ageMatches = age === null
+          ? range.ageMin === 0 && range.ageMax === null
+          : age >= range.ageMin && (range.ageMax === null || age <= range.ageMax);
+        return ageMatches;
+      };
+      const parameterRanges = rangeRows.filter((range) => range.parameterId === parameter.id);
+      const matchedRange =
+        (patientGender
+          ? parameterRanges.find((range) =>
+              range.gender === patientGender && ageMatchesProfile(range))
+          : undefined) ||
+        parameterRanges.find((range) =>
+          range.gender === "all" && ageMatchesProfile(range));
+      return {
+        ...parameter,
+        effectiveReferenceLow: matchedRange
+          ? matchedRange.referenceLow
+          : parameter.referenceLow,
+        effectiveReferenceHigh: matchedRange
+          ? matchedRange.referenceHigh
+          : parameter.referenceHigh,
+        effectiveReferenceRange: matchedRange
+          ? matchedRange.referenceRange
+          : parameter.referenceRange,
+        hasPatientMatchedRange: matchedRange != null,
+      };
+    });
+    const results = await db.select().from(resultEntries)
+      .where(eq(resultEntries.orderItemId, item.id));
+    return { ...item, investigation, parameters: parametersWithEffectiveBounds, results };
+  }));
+  res.json({ ...order, patient, items: detailedItems });
 }));
 
 api.get("/payments/paystack/config", requireRole("admin", "account"), asyncRoute(async (_req, res) => {
@@ -998,28 +1069,45 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
   const body = z.object({
     results: z.array(z.object({
       parameterId: z.uuid(),
-      value: z.string(),
+      value: z.string().trim().min(1, "Result values cannot be blank"),
       abnormalFlag: z.enum(["normal", "high", "low", "critical"]).optional(),
       remarks: z.string().optional(),
     })).min(1),
   }).parse(req.body);
   const orderId = String(req.params.orderId);
   const itemId = String(req.params.itemId);
-  const orderItem = await db.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
-  if (!orderItem || orderItem.orderId !== orderId) {
-    return res.status(404).json({ error: "Order item not found" });
+  const parameterIds = [...new Set(body.results.map((result) => result.parameterId))];
+  const parameterRows = parameterIds.length
+    ? await db.select().from(parameters).where(sql`${parameters.id} in ${parameterIds}`)
+    : [];
+  for (const result of body.results) {
+    const parameter = parameterRows.find((row) => row.id === result.parameterId);
+    if (!parameter) return res.status(400).json({ error: "One or more parameters are invalid" });
+    const trimmedValue = result.value.trim();
+    if (parameter.dataType === "number" && !Number.isFinite(Number(trimmedValue))) {
+      return res.status(400).json({
+        error: `Enter a numeric value for ${parameter.name}`,
+      });
+    }
   }
-  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, orderId) });
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
-    return res.status(409).json({ error: "Payment must be received in full before results can be captured" });
-  }
-  await db.transaction(async (tx) => {
+  try {
+    await db.transaction(async (tx) => {
+    const [lockedOrder] = await tx.select().from(labOrders)
+      .where(eq(labOrders.id, orderId))
+      .for("update");
+    if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+    if (numberValue(lockedOrder.paidAmount) < numberValue(lockedOrder.totalAmount)) {
+      throw Object.assign(
+        new Error("Payment must be received in full before results can be captured"),
+        { statusCode: 409 },
+      );
+    }
+    const orderItem = await tx.query.orderItems.findFirst({
+      where: and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId)),
+    });
+    if (!orderItem) throw Object.assign(new Error("Order item not found"), { statusCode: 404 });
     await tx.delete(resultEntries).where(eq(resultEntries.orderItemId, itemId));
-    const orderItem = await tx.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
-    const order = orderItem
-      ? await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) })
-      : null;
+    const order = await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) });
     const patient = order
       ? await tx.query.patients.findFirst({ where: eq(patients.id, order.patientId) })
       : null;
@@ -1043,36 +1131,39 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
       if (parameter && Number.isFinite(numericValue)) {
         const patientGender = patient?.gender?.toLowerCase();
         const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
-        matchedRange = rangeRows.find((range) => {
-          if (range.parameterId !== parameter.id) return false;
-          const genderMatches = range.gender === "all" || (patientGender != null && range.gender === patientGender);
-          const ageMatches = age === null
+        const ageMatchesProfile = (range: typeof parameterReferenceRanges.$inferSelect) =>
+          age === null
             ? range.ageMin === 0 && range.ageMax === null
             : age >= range.ageMin &&
-            (range.ageMax === null || age <= range.ageMax);
-          return genderMatches && ageMatches;
-        }) ?? null;
+              (range.ageMax === null || age <= range.ageMax);
+        const parameterRanges = rangeRows.filter((range) => range.parameterId === parameter.id);
+        matchedRange =
+          (patientGender
+            ? parameterRanges.find((range) =>
+                range.gender === patientGender && ageMatchesProfile(range))
+            : undefined) ||
+          parameterRanges.find((range) =>
+            range.gender === "all" && ageMatchesProfile(range)) ||
+          null;
       }
-      if (parameter?.dataType === "number" && matchedRange && result.abnormalFlag == null && Number.isFinite(numericValue)) {
+      if (parameter?.dataType === "number" && matchedRange && Number.isFinite(numericValue)) {
         referenceLow = matchedRange.referenceLow;
         referenceHigh = matchedRange.referenceHigh;
         if (referenceLow != null && numericValue < Number(referenceLow)) abnormalFlag = "low";
         else if (referenceHigh != null && numericValue > Number(referenceHigh)) abnormalFlag = "high";
         else if (referenceLow != null || referenceHigh != null) abnormalFlag = "normal";
-      } else if (parameter?.dataType === "number" && result.abnormalFlag == null && Number.isFinite(numericValue) &&
-                 parameter.referenceLow != null && parameter.referenceHigh != null) {
+      } else if (parameter?.dataType === "number" && Number.isFinite(numericValue) &&
+                 (parameter.referenceLow != null || parameter.referenceHigh != null)) {
         referenceLow = parameter.referenceLow;
         referenceHigh = parameter.referenceHigh;
-        abnormalFlag = numericValue < Number(referenceLow)
-          ? "low"
-          : numericValue > Number(referenceHigh)
-            ? "high"
-            : "normal";
+        if (referenceLow != null && numericValue < Number(referenceLow)) abnormalFlag = "low";
+        else if (referenceHigh != null && numericValue > Number(referenceHigh)) abnormalFlag = "high";
+        else abnormalFlag = "normal";
       }
       return {
         orderItemId: itemId,
         parameterId: result.parameterId,
-        value: result.value,
+        value: trimmedValue,
         abnormalFlag,
         referenceLow,
         referenceHigh,
@@ -1080,20 +1171,73 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
         enteredBy: req.appUser!.id,
       };
     }));
-  });
-  await db.update(labOrders).set({ status: "processing" }).where(eq(labOrders.id, orderId));
+    await tx.update(labOrders).set({ status: "processing" }).where(eq(labOrders.id, orderId));
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
+    }
+    throw error;
+  }
   res.status(201).json({ saved: body.results.length });
 }));
 
 api.post("/orders/:id/complete", requireRole("admin", "technician"), asyncRoute(async (req, res) => {
-  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, String(req.params.id)) });
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
-    return res.status(409).json({ error: "Payment must be received in full before the report can be completed" });
+  const orderId = String(req.params.id);
+  try {
+    const updated = await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx.select().from(labOrders)
+        .where(eq(labOrders.id, orderId))
+        .for("update");
+      if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+      if (numberValue(lockedOrder.paidAmount) < numberValue(lockedOrder.totalAmount)) {
+        throw Object.assign(
+          new Error("Payment must be received in full before the report can be completed"),
+          { statusCode: 409 },
+        );
+      }
+      const items = await tx.select().from(orderItems)
+        .where(eq(orderItems.orderId, lockedOrder.id));
+      for (const item of items) {
+        const investigation = await tx.query.investigations.findFirst({
+          where: eq(investigations.id, item.investigationId),
+        });
+        if (!investigation) continue;
+        const itemParameters = await tx.select().from(parameters)
+          .where(and(
+            eq(parameters.investigationId, investigation.id),
+            eq(parameters.active, true),
+          ));
+        const existingResults = await tx.select().from(resultEntries)
+          .where(eq(resultEntries.orderItemId, item.id));
+        const capturedIds = new Set(
+          existingResults
+            .filter((entry) => entry.value.trim().length > 0)
+            .map((entry) => entry.parameterId),
+        );
+        if (itemParameters.some((parameter) => !capturedIds.has(parameter.id))) {
+          throw Object.assign(
+            new Error(`All parameters must be completed for ${investigation.name}`),
+            { statusCode: 409 },
+          );
+        }
+      }
+      const [completed] = await tx.update(labOrders)
+        .set({ status: "completed" })
+        .where(eq(labOrders.id, lockedOrder.id))
+        .returning();
+      return completed;
+    });
+    if (!updated) return res.status(404).json({ error: "Order not found" });
+    res.json(updated);
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
+    }
+    throw error;
   }
-  const [updated] = await db.update(labOrders).set({ status: "completed" }).where(eq(labOrders.id, order.id)).returning();
-  if (!updated) return res.status(404).json({ error: "Order not found" });
-  res.json(updated);
 }));
 
 api.get("/orders/:id/report", asyncRoute(async (req, res) => {
@@ -1124,6 +1268,8 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   pdf.fontSize(18).text(profile?.name || "Laboratory", { align: "center" });
   pdf.fontSize(10).text(profile?.address || "", { align: "center" });
   if (profile?.phone) pdf.text(profile.phone, { align: "center" });
+  if (profile?.email) pdf.text(profile.email, { align: "center" });
+  if (profile?.slogan) pdf.fontSize(9).text(profile.slogan, { align: "center", oblique: true });
   pdf.moveDown();
   pdf.fontSize(16).text("Laboratory Test Report", { align: "center" });
   pdf.moveDown();
@@ -1149,6 +1295,22 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
     }
     pdf.moveDown();
   }
+  const bottomY = pdf.page.height - pdf.page.margins.bottom;
+  let signatureY = pdf.y;
+  if (signatureY + 55 > bottomY) {
+    pdf.addPage();
+    signatureY = pdf.y;
+  } else {
+    signatureY += 20;
+  }
+  pdf.moveTo(pdf.page.margins.left, signatureY);
+  pdf.lineTo(pdf.page.margins.left + 180, signatureY);
+  pdf.stroke();
+  pdf.y = signatureY + 8;
+  pdf.fontSize(10).text("Authorized Laboratory Scientist", {
+    width: 180,
+    align: "left",
+  });
   pdf.end();
 }));
 
