@@ -813,14 +813,17 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
 api.get("/orders", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  const rows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
-  const detailedRows = await Promise.all(rows.map(async (row) => {
-    const patient = await db.query.patients.findFirst({
-      where: eq(patients.id, row.patientId),
-    });
-    return { ...row, patient };
-  }));
-  res.json(status ? detailedRows.filter((row) => row.status === status) : detailedRows);
+  const allRows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
+  const rows = status ? allRows.filter((row) => row.status === status) : allRows;
+  const patientIds = [...new Set(rows.map((row) => row.patientId))];
+  const patientRows = patientIds.length
+    ? await db.select().from(patients).where(sql`${patients.id} in ${patientIds}`)
+    : [];
+  const patientsById = new Map(patientRows.map((patient) => [patient.id, patient]));
+  res.json(rows.map((row) => ({
+    ...row,
+    patient: patientsById.get(row.patientId) || null,
+  })));
 }));
 
 api.get("/orders/:id", asyncRoute(async (req, res) => {
@@ -837,9 +840,38 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
           .where(eq(parameters.investigationId, investigation.id))
           .orderBy(asc(parameters.sortOrder), asc(parameters.name))
       : [];
+    const parameterIds = itemParameters.map((parameter) => parameter.id);
+    const rangeRows = parameterIds.length
+      ? await db.select().from(parameterReferenceRanges)
+          .where(sql`${parameterReferenceRanges.parameterId} in ${parameterIds}`)
+          .orderBy(asc(parameterReferenceRanges.sortOrder), asc(parameterReferenceRanges.id))
+      : [];
+    const patientGender = patient?.gender?.toLowerCase();
+    const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
+    const parametersWithEffectiveBounds = itemParameters.map((parameter) => {
+      const matchedRange = rangeRows.find((range) => {
+        if (range.parameterId !== parameter.id) return false;
+        const genderMatches = range.gender === "all"
+          || (patientGender != null && range.gender === patientGender);
+        const ageMatches = age === null
+          ? range.ageMin === 0 && range.ageMax === null
+          : age >= range.ageMin && (range.ageMax === null || age <= range.ageMax);
+        return genderMatches && ageMatches;
+      });
+      return {
+        ...parameter,
+        effectiveReferenceLow: matchedRange
+          ? matchedRange.referenceLow
+          : parameter.referenceLow,
+        effectiveReferenceHigh: matchedRange
+          ? matchedRange.referenceHigh
+          : parameter.referenceHigh,
+        hasPatientMatchedRange: matchedRange != null,
+      };
+    });
     const results = await db.select().from(resultEntries)
       .where(eq(resultEntries.orderItemId, item.id));
-    return { ...item, investigation, parameters: itemParameters, results };
+    return { ...item, investigation, parameters: parametersWithEffectiveBounds, results };
   }));
   res.json({ ...order, patient, items: detailedItems });
 }));
@@ -1017,7 +1049,7 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
   const body = z.object({
     results: z.array(z.object({
       parameterId: z.uuid(),
-      value: z.string(),
+      value: z.string().trim().min(1, "Result values cannot be blank"),
       abnormalFlag: z.enum(["normal", "high", "low", "critical"]).optional(),
       remarks: z.string().optional(),
     })).min(1),
@@ -1118,7 +1150,11 @@ api.post("/orders/:id/complete", requireRole("admin", "technician"), asyncRoute(
       .where(and(eq(parameters.investigationId, investigation.id), eq(parameters.active, true)));
     const existingResults = await db.select().from(resultEntries)
       .where(eq(resultEntries.orderItemId, item.id));
-    const capturedIds = new Set(existingResults.map((entry) => entry.parameterId));
+    const capturedIds = new Set(
+      existingResults
+        .filter((entry) => entry.value.trim().length > 0)
+        .map((entry) => entry.parameterId),
+    );
     if (itemParameters.some((parameter) => !capturedIds.has(parameter.id))) {
       return res.status(409).json({
         error: `All parameters must be completed for ${investigation.name}`,

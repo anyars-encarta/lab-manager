@@ -218,28 +218,32 @@ export function InvestigationsPage({
     }
   };
 
-  useEffect(() => {
-    const loadAllInvestigationOptions = async () => {
-      const allOptions: Investigation[] = [];
-      let pageNumber = 1;
-      while (true) {
-        const response = await fetch(
-          `${API_URL}/api/investigations?page=${pageNumber}&pageSize=100`,
-          { credentials: "include" },
-        );
-        if (!response.ok) {
-          throw new Error("Unable to load investigation options");
-        }
-        const data = await response.json();
-        const rows = Array.isArray(data.data) ? data.data : [];
-        allOptions.push(...rows);
-        if (rows.length === 0 || allOptions.length >= Number(data.total || allOptions.length)) {
-          break;
-        }
-        pageNumber += 1;
+  const loadAllInvestigationOptions = async () => {
+    const allOptions: Investigation[] = [];
+    let pageNumber = 1;
+    while (true) {
+      const response = await fetch(
+        `${API_URL}/api/investigations?page=${pageNumber}&pageSize=100`,
+        { credentials: "include" },
+      );
+      if (!response.ok) {
+        throw new Error("Unable to load investigation options");
       }
-      setInvestigationOptions(allOptions);
-    };
+      const data = await response.json();
+      const rows = Array.isArray(data.data) ? data.data : [];
+      allOptions.push(...rows);
+      if (
+        rows.length === 0 ||
+        allOptions.length >= Number(data.total || allOptions.length)
+      ) {
+        break;
+      }
+      pageNumber += 1;
+    }
+    setInvestigationOptions(allOptions);
+  };
+
+  useEffect(() => {
     void loadAllInvestigationOptions().catch(() =>
       setInvestigationOptions((current) => current),
     );
@@ -376,6 +380,7 @@ export function InvestigationsPage({
       );
       setTestDialogOpen(false);
       await load();
+      await loadAllInvestigationOptions();
     } catch (error) {
       toast.error("Unable to save investigation", {
         description:

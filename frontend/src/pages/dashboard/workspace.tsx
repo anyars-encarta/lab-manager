@@ -130,8 +130,17 @@ export function LaboratoryWorkspace({ section }: Props) {
   }>>({});
   const [resultSaving, setResultSaving] = useState(false);
   const [resultError, setResultError] = useState("");
+  const resultRequestGeneration = useRef(0);
+  const resultDraftRef = useRef<Record<string, {
+    value: string;
+    abnormalFlag?: "normal" | "high" | "low" | "critical";
+    remarks: string;
+  }>>({});
   const requestGeneration = useRef(0);
   const [TitleIcon] = [titles[section][2]];
+  useEffect(() => {
+    resultDraftRef.current = resultDraft;
+  }, [resultDraft]);
 
   const load = async () => {
     const generation = ++requestGeneration.current;
@@ -601,15 +610,20 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
-  const openResults = async (order: any) => {
+  const openResults = async (order: any, preserveUnsaved = false) => {
+    const generation = ++resultRequestGeneration.current;
     setResultError("");
-    setResultDraft({});
-    setResultOrder(null);
+    if (!preserveUnsaved) {
+      setResultDraft({});
+      resultDraftRef.current = {};
+      setResultOrder(null);
+    }
     try {
       const response = await fetch(`${API_URL}/api/orders/${order.id}`, {
         credentials: "include",
       });
       const detailed = await response.json().catch(() => null);
+      if (generation !== resultRequestGeneration.current) return;
       if (!response.ok) throw new Error(detailed?.error || "Unable to load laboratory order");
       const draft: typeof resultDraft = {};
       for (const item of detailed.items || []) {
@@ -617,16 +631,22 @@ export function LaboratoryWorkspace({ section }: Props) {
           const existing = (item.results || []).find(
             (result: any) => result.parameterId === parameter.id,
           );
-          draft[`${item.id}:${parameter.id}`] = {
+          const persistedDraft = {
             value: existing?.value || "",
             abnormalFlag: existing?.abnormalFlag || undefined,
             remarks: existing?.remarks || "",
           };
+          const key = `${item.id}:${parameter.id}`;
+          draft[key] = preserveUnsaved
+            ? resultDraftRef.current[key] || persistedDraft
+            : persistedDraft;
         }
       }
+      resultDraftRef.current = draft;
       setResultDraft(draft);
       setResultOrder(detailed);
     } catch (error) {
+      if (generation !== resultRequestGeneration.current) return;
       toast.error(error instanceof Error ? error.message : "Unable to open result capture");
     }
   };
@@ -659,7 +679,7 @@ export function LaboratoryWorkspace({ section }: Props) {
       toast.success("Results saved", {
         description: `${item.investigation?.name || "Investigation"} results were captured.`,
       });
-      await openResults(resultOrder);
+      await openResults(resultOrder, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save results";
       setResultError(message);
@@ -671,6 +691,24 @@ export function LaboratoryWorkspace({ section }: Props) {
 
   const completeResultOrder = async () => {
     if (!resultOrder) return;
+    const dirtyDraft = (resultOrder.items || []).some((item: any) =>
+      (item.parameters || []).filter((parameter: any) => parameter.active).some((parameter: any) => {
+        const key = `${item.id}:${parameter.id}`;
+        const draft = resultDraftRef.current[key];
+        const persisted = (item.results || []).find(
+          (result: any) => result.parameterId === parameter.id,
+        );
+        return !draft ||
+          draft.value !== (persisted?.value || "") ||
+          draft.remarks !== (persisted?.remarks || "");
+      }),
+    );
+    if (dirtyDraft) {
+      const message = "Save or revert all changed results before completing the report.";
+      setResultError(message);
+      toast.error("Unsaved result changes", { description: message });
+      return;
+    }
     setResultSaving(true);
     setResultError("");
     try {
@@ -681,6 +719,9 @@ export function LaboratoryWorkspace({ section }: Props) {
       const completed = await response.json().catch(() => null);
       if (!response.ok) throw new Error(completed?.error || "Unable to complete report");
       toast.success("Report completed");
+      ++resultRequestGeneration.current;
+      resultDraftRef.current = {};
+      setResultDraft({});
       setResultOrder(null);
       await load();
     } catch (error) {
@@ -1047,6 +1088,9 @@ export function LaboratoryWorkspace({ section }: Props) {
         open={resultOrder != null}
         onOpenChange={(open) => {
           if (!open && !resultSaving) {
+            ++resultRequestGeneration.current;
+            resultDraftRef.current = {};
+            setResultDraft({});
             setResultOrder(null);
             setResultError("");
           }
@@ -1083,12 +1127,12 @@ export function LaboratoryWorkspace({ section }: Props) {
                       parameter.dataType === "number" &&
                       draft.value.trim() !== "" &&
                       Number.isFinite(numericValue);
-                    const low = parameter.referenceLow == null
+                    const low = parameter.effectiveReferenceLow == null
                       ? null
-                      : Number(parameter.referenceLow);
-                    const high = parameter.referenceHigh == null
+                      : Number(parameter.effectiveReferenceLow);
+                    const high = parameter.effectiveReferenceHigh == null
                       ? null
-                      : Number(parameter.referenceHigh);
+                      : Number(parameter.effectiveReferenceHigh);
                     const generatedFlag = hasNumericValue
                       ? low != null && numericValue < low
                         ? "low"
@@ -1166,7 +1210,13 @@ export function LaboratoryWorkspace({ section }: Props) {
             <Button
               type="button"
               variant="outline"
-              onClick={() => setResultOrder(null)}
+              onClick={() => {
+                ++resultRequestGeneration.current;
+                resultDraftRef.current = {};
+                setResultDraft({});
+                setResultOrder(null);
+                setResultError("");
+              }}
               disabled={resultSaving}
             >
               Close
