@@ -1142,20 +1142,27 @@ export function LaboratoryWorkspace({ section }: Props) {
                             ? "normal"
                             : ""
                       : "";
+                    const matchedReferenceText =
+                      parameter.hasPatientMatchedRange
+                        ? parameter.effectiveReferenceRange ||
+                          (low != null || high != null
+                            ? `${low ?? "—"} — ${high ?? "—"}`
+                            : "")
+                        : parameter.referenceRange || "";
                     return (
                       <div key={parameter.id} className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_180px_1fr]">
                         <div className="space-y-2">
                           <Label>{parameter.name}{parameter.unit ? ` (${parameter.unit})` : ""}</Label>
                           <Input
                             value={draft.value}
-                            placeholder={parameter.referenceRange || "Enter result"}
+                            placeholder={matchedReferenceText || "Enter result"}
                             onChange={(event) => setResultDraft((current) => ({
                               ...current,
                               [key]: { ...draft, value: event.target.value },
                             }))}
                           />
-                          {parameter.referenceRange && (
-                            <p className="text-xs text-muted-foreground">Reference: {parameter.referenceRange}</p>
+                          {matchedReferenceText && (
+                            <p className="text-xs text-muted-foreground">Reference: {matchedReferenceText}</p>
                           )}
                         </div>
                         <div className="space-y-2">

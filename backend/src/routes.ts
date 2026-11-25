@@ -883,6 +883,9 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
         effectiveReferenceHigh: matchedRange
           ? matchedRange.referenceHigh
           : parameter.referenceHigh,
+        effectiveReferenceRange: matchedRange
+          ? matchedRange.referenceRange
+          : parameter.referenceRange,
         hasPatientMatchedRange: matchedRange != null,
       };
     });
@@ -1073,21 +1076,38 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
   }).parse(req.body);
   const orderId = String(req.params.orderId);
   const itemId = String(req.params.itemId);
-  const orderItem = await db.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
-  if (!orderItem || orderItem.orderId !== orderId) {
-    return res.status(404).json({ error: "Order item not found" });
+  const parameterIds = [...new Set(body.results.map((result) => result.parameterId))];
+  const parameterRows = parameterIds.length
+    ? await db.select().from(parameters).where(sql`${parameters.id} in ${parameterIds}`)
+    : [];
+  for (const result of body.results) {
+    const parameter = parameterRows.find((row) => row.id === result.parameterId);
+    if (!parameter) return res.status(400).json({ error: "One or more parameters are invalid" });
+    const trimmedValue = result.value.trim();
+    if (parameter.dataType === "number" && !Number.isFinite(Number(trimmedValue))) {
+      return res.status(400).json({
+        error: `Enter a numeric value for ${parameter.name}`,
+      });
+    }
   }
-  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, orderId) });
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
-    return res.status(409).json({ error: "Payment must be received in full before results can be captured" });
-  }
-  await db.transaction(async (tx) => {
+  try {
+    await db.transaction(async (tx) => {
+    const [lockedOrder] = await tx.select().from(labOrders)
+      .where(eq(labOrders.id, orderId))
+      .for("update");
+    if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+    if (numberValue(lockedOrder.paidAmount) < numberValue(lockedOrder.totalAmount)) {
+      throw Object.assign(
+        new Error("Payment must be received in full before results can be captured"),
+        { statusCode: 409 },
+      );
+    }
+    const orderItem = await tx.query.orderItems.findFirst({
+      where: and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId)),
+    });
+    if (!orderItem) throw Object.assign(new Error("Order item not found"), { statusCode: 404 });
     await tx.delete(resultEntries).where(eq(resultEntries.orderItemId, itemId));
-    const orderItem = await tx.query.orderItems.findFirst({ where: eq(orderItems.id, itemId) });
-    const order = orderItem
-      ? await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) })
-      : null;
+    const order = await tx.query.labOrders.findFirst({ where: eq(labOrders.id, orderItem.orderId) });
     const patient = order
       ? await tx.query.patients.findFirst({ where: eq(patients.id, order.patientId) })
       : null;
@@ -1151,41 +1171,73 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
         enteredBy: req.appUser!.id,
       };
     }));
-  });
-  await db.update(labOrders).set({ status: "processing" }).where(eq(labOrders.id, orderId));
+    await tx.update(labOrders).set({ status: "processing" }).where(eq(labOrders.id, orderId));
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
+    }
+    throw error;
+  }
   res.status(201).json({ saved: body.results.length });
 }));
 
 api.post("/orders/:id/complete", requireRole("admin", "technician"), asyncRoute(async (req, res) => {
-  const order = await db.query.labOrders.findFirst({ where: eq(labOrders.id, String(req.params.id)) });
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  if (numberValue(order.paidAmount) < numberValue(order.totalAmount)) {
-    return res.status(409).json({ error: "Payment must be received in full before the report can be completed" });
-  }
-  const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-  for (const item of items) {
-    const investigation = await db.query.investigations.findFirst({
-      where: eq(investigations.id, item.investigationId),
+  const orderId = String(req.params.id);
+  try {
+    const updated = await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx.select().from(labOrders)
+        .where(eq(labOrders.id, orderId))
+        .for("update");
+      if (!lockedOrder) throw Object.assign(new Error("Order not found"), { statusCode: 404 });
+      if (numberValue(lockedOrder.paidAmount) < numberValue(lockedOrder.totalAmount)) {
+        throw Object.assign(
+          new Error("Payment must be received in full before the report can be completed"),
+          { statusCode: 409 },
+        );
+      }
+      const items = await tx.select().from(orderItems)
+        .where(eq(orderItems.orderId, lockedOrder.id));
+      for (const item of items) {
+        const investigation = await tx.query.investigations.findFirst({
+          where: eq(investigations.id, item.investigationId),
+        });
+        if (!investigation) continue;
+        const itemParameters = await tx.select().from(parameters)
+          .where(and(
+            eq(parameters.investigationId, investigation.id),
+            eq(parameters.active, true),
+          ));
+        const existingResults = await tx.select().from(resultEntries)
+          .where(eq(resultEntries.orderItemId, item.id));
+        const capturedIds = new Set(
+          existingResults
+            .filter((entry) => entry.value.trim().length > 0)
+            .map((entry) => entry.parameterId),
+        );
+        if (itemParameters.some((parameter) => !capturedIds.has(parameter.id))) {
+          throw Object.assign(
+            new Error(`All parameters must be completed for ${investigation.name}`),
+            { statusCode: 409 },
+          );
+        }
+      }
+      const [completed] = await tx.update(labOrders)
+        .set({ status: "completed" })
+        .where(eq(labOrders.id, lockedOrder.id))
+        .returning();
+      return completed;
     });
-    if (!investigation) continue;
-    const itemParameters = await db.select().from(parameters)
-      .where(and(eq(parameters.investigationId, investigation.id), eq(parameters.active, true)));
-    const existingResults = await db.select().from(resultEntries)
-      .where(eq(resultEntries.orderItemId, item.id));
-    const capturedIds = new Set(
-      existingResults
-        .filter((entry) => entry.value.trim().length > 0)
-        .map((entry) => entry.parameterId),
-    );
-    if (itemParameters.some((parameter) => !capturedIds.has(parameter.id))) {
-      return res.status(409).json({
-        error: `All parameters must be completed for ${investigation.name}`,
-      });
+    if (!updated) return res.status(404).json({ error: "Order not found" });
+    res.json(updated);
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) {
+      const statusError = error as { statusCode: number; message: string };
+      return res.status(statusError.statusCode).json({ error: statusError.message });
     }
+    throw error;
   }
-  const [updated] = await db.update(labOrders).set({ status: "completed" }).where(eq(labOrders.id, order.id)).returning();
-  if (!updated) return res.status(404).json({ error: "Order not found" });
-  res.json(updated);
 }));
 
 api.get("/orders/:id/report", asyncRoute(async (req, res) => {
@@ -1243,7 +1295,14 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
     }
     pdf.moveDown();
   }
-  const signatureY = pdf.page.height - pdf.page.margins.bottom - 55;
+  const bottomY = pdf.page.height - pdf.page.margins.bottom;
+  let signatureY = pdf.y;
+  if (signatureY + 55 > bottomY) {
+    pdf.addPage();
+    signatureY = pdf.y;
+  } else {
+    signatureY += 20;
+  }
   pdf.moveTo(pdf.page.margins.left, signatureY);
   pdf.lineTo(pdf.page.margins.left + 180, signatureY);
   pdf.stroke();
