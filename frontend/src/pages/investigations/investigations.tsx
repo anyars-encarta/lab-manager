@@ -120,6 +120,7 @@ export function InvestigationsPage({
     referenceLow: "",
     referenceHigh: "",
   });
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -290,6 +291,7 @@ export function InvestigationsPage({
       referenceLow: "",
       referenceHigh: "",
     });
+    setEditingProfileId(null);
     setEditingParameter(parameter || null);
     setParameterActive(parameter?.active ?? true);
     setSubmissionError("");
@@ -458,28 +460,38 @@ export function InvestigationsPage({
       const profileHigh = String(values.profileHigh || "").trim();
       if (savedParameterId && (profileRange || profileLow || profileHigh)) {
         if (parameterSession !== profileSessionGeneration.current) return;
+        const submittedProfile = {
+          gender: profileDraft.gender,
+          ageMin: Number(profileAgeMin || 0),
+          ageMax: profileAgeMax === "" ? null : Number(profileAgeMax),
+          referenceRange: profileRange || null,
+          referenceLow: profileLow === "" ? null : Number(profileLow),
+          referenceHigh: profileHigh === "" ? null : Number(profileHigh),
+        };
+        const existingProfile = editingProfileId
+          ? referenceProfiles.find((profile) => profile.id === editingProfileId)
+          : null;
+        const profileUrl = existingProfile
+          ? `${API_URL}/api/parameter-reference-ranges/${existingProfile.id}`
+          : `${API_URL}/api/parameters/${savedParameterId}/reference-ranges`;
         const profileResponse = await fetch(
-          `${API_URL}/api/parameters/${savedParameterId}/reference-ranges`,
+          profileUrl,
           {
-            method: "POST",
+            method: existingProfile ? "PATCH" : "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              gender: profileDraft.gender,
-              ageMin: Number(profileAgeMin || 0),
-              ageMax: profileAgeMax === "" ? null : Number(profileAgeMax),
-              referenceRange: profileRange || null,
-              referenceLow: profileLow === "" ? null : Number(profileLow),
-              referenceHigh: profileHigh === "" ? null : Number(profileHigh),
-            }),
+            body: JSON.stringify(submittedProfile),
           },
         );
-        if (!profileResponse.ok)
+        const profileBody = await profileResponse.json().catch(() => null);
+        if (!profileResponse.ok) {
           throw new Error(
-            "Parameter saved, but reference profile could not be added",
+            profileBody?.error ||
+              "Parameter saved, but the reference profile could not be updated",
           );
+        }
         if (parameterSession !== profileSessionGeneration.current) return;
-        toast.success("Reference profile added", {
+        toast.success(existingProfile ? "Reference profile updated" : "Reference profile added", {
           description: "The age/gender reference range was saved successfully.",
         });
         savedParameterIdRef.current = null;
@@ -1000,40 +1012,72 @@ export function InvestigationsPage({
                         }`}
                     </span>
                     {canWrite && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={async () => {
-                          try {
-                            const response = await fetch(
-                              `${API_URL}/api/parameter-reference-ranges/${profile.id}`,
-                              { method: "DELETE", credentials: "include" },
-                            );
-                            if (!response.ok)
-                              throw new Error(
-                                "Unable to delete reference profile",
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingProfileId(profile.id);
+                            setProfileDraft({
+                              gender: profile.gender,
+                              ageMin: String(profile.ageMin),
+                              ageMax: profile.ageMax == null ? "" : String(profile.ageMax),
+                              referenceRange: profile.referenceRange || "",
+                              referenceLow: profile.referenceLow == null ? "" : String(profile.referenceLow),
+                              referenceHigh: profile.referenceHigh == null ? "" : String(profile.referenceHigh),
+                            });
+                          }}
+                          aria-label="Edit reference profile"
+                        >
+                          <Settings2 className="h-4 w-4 cursor-pointer" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={async () => {
+                            try {
+                              const response = await fetch(
+                                `${API_URL}/api/parameter-reference-ranges/${profile.id}`,
+                                { method: "DELETE", credentials: "include" },
                               );
-                            setReferenceProfiles((current) =>
-                              current.filter((item) => item.id !== profile.id),
-                            );
-                            toast.success("Reference profile deleted", {
-                              description:
-                                "The age/gender reference range was removed.",
-                            });
-                          } catch (error) {
-                            toast.error("Unable to delete reference profile", {
-                              description:
-                                error instanceof Error
-                                  ? error.message
-                                  : "An unexpected error occurred.",
-                            });
-                          }
-                        }}
-                        aria-label="Delete reference profile"
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive cursor-pointer" />
-                      </Button>
+                              if (!response.ok)
+                                throw new Error(
+                                  "Unable to delete reference profile",
+                                );
+                              setReferenceProfiles((current) =>
+                                current.filter((item) => item.id !== profile.id),
+                              );
+                              if (editingProfileId === profile.id) {
+                                setEditingProfileId(null);
+                                setProfileDraft({
+                                  gender: "all",
+                                  ageMin: "0",
+                                  ageMax: "",
+                                  referenceRange: "",
+                                  referenceLow: "",
+                                  referenceHigh: "",
+                                });
+                              }
+                              toast.success("Reference profile deleted", {
+                                description:
+                                  "The age/gender reference range was removed.",
+                              });
+                            } catch (error) {
+                              toast.error("Unable to delete reference profile", {
+                                description:
+                                  error instanceof Error
+                                    ? error.message
+                                    : "An unexpected error occurred.",
+                              });
+                            }
+                          }}
+                          aria-label="Delete reference profile"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive cursor-pointer" />
+                        </Button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1063,7 +1107,13 @@ export function InvestigationsPage({
                   <Field
                     name="profileRange"
                     label="Reference text"
-                    defaultValue={profileDraft.referenceRange}
+                    value={profileDraft.referenceRange}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        referenceRange: event.target.value,
+                      }))
+                    }
                   />
                 </div>
                 <div className="grid grid-cols-4 gap-3">
@@ -1071,27 +1121,51 @@ export function InvestigationsPage({
                     name="profileAgeMin"
                     label="Age min"
                     type="number"
-                    defaultValue={profileDraft.ageMin}
+                    value={profileDraft.ageMin}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        ageMin: event.target.value,
+                      }))
+                    }
                   />
                   <Field
                     name="profileAgeMax"
                     label="Age max"
                     type="number"
-                    defaultValue={profileDraft.ageMax}
+                    value={profileDraft.ageMax}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        ageMax: event.target.value,
+                      }))
+                    }
                   />
                   <Field
                     name="profileLow"
                     label="Low"
                     type="number"
                     step="0.0001"
-                    defaultValue={profileDraft.referenceLow}
+                    value={profileDraft.referenceLow}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        referenceLow: event.target.value,
+                      }))
+                    }
                   />
                   <Field
                     name="profileHigh"
                     label="High"
                     type="number"
                     step="0.0001"
-                    defaultValue={profileDraft.referenceHigh}
+                    value={profileDraft.referenceHigh}
+                    onChange={(event) =>
+                      setProfileDraft((current) => ({
+                        ...current,
+                        referenceHigh: event.target.value,
+                      }))
+                    }
                   />
                 </div>
                 <Button
@@ -1178,6 +1252,8 @@ function Field({
   required = false,
   step,
   defaultValue,
+  value,
+  onChange,
 }: {
   name: string;
   label: string;
@@ -1185,6 +1261,8 @@ function Field({
   required?: boolean;
   step?: string;
   defaultValue?: string | number;
+  value?: string | number;
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
     <div className="space-y-2">
@@ -1196,6 +1274,8 @@ function Field({
         step={step}
         required={required}
         defaultValue={defaultValue}
+        value={value}
+        onChange={onChange}
       />
     </div>
   );

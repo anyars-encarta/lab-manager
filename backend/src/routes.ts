@@ -559,6 +559,18 @@ api.post("/parameters/:id/reference-ranges", requireRole("admin"), asyncRoute(as
     return res.status(400).json({ error: "Reference low value cannot exceed reference high value" });
   }
   const parameterId = String(req.params.id);
+  const existingRanges = await db.select().from(parameterReferenceRanges)
+    .where(eq(parameterReferenceRanges.parameterId, parameterId));
+  const exactMatch = existingRanges.find((range) =>
+    range.gender === body.gender &&
+    range.ageMin === body.ageMin &&
+    range.ageMax === (body.ageMax ?? null) &&
+    range.referenceRange === (body.referenceRange ?? null) &&
+    (range.referenceLow == null ? null : Number(range.referenceLow)) === (body.referenceLow ?? null) &&
+    (range.referenceHigh == null ? null : Number(range.referenceHigh)) === (body.referenceHigh ?? null) &&
+    range.sortOrder === body.sortOrder
+  );
+  if (exactMatch) return res.status(200).json(exactMatch);
   const transactionResult = await db.transaction(async (tx): Promise<"overlap" | Array<typeof parameterReferenceRanges.$inferSelect>> => {
     await tx.execute(sql`select "id" from "parameters" where "id" = ${parameterId} for update`);
     const ranges = await tx.select().from(parameterReferenceRanges)
@@ -849,15 +861,20 @@ api.get("/orders/:id", asyncRoute(async (req, res) => {
     const patientGender = patient?.gender?.toLowerCase();
     const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
     const parametersWithEffectiveBounds = itemParameters.map((parameter) => {
-      const matchedRange = rangeRows.find((range) => {
-        if (range.parameterId !== parameter.id) return false;
-        const genderMatches = range.gender === "all"
-          || (patientGender != null && range.gender === patientGender);
+      const ageMatchesProfile = (range: typeof parameterReferenceRanges.$inferSelect) => {
         const ageMatches = age === null
           ? range.ageMin === 0 && range.ageMax === null
           : age >= range.ageMin && (range.ageMax === null || age <= range.ageMax);
-        return genderMatches && ageMatches;
-      });
+        return ageMatches;
+      };
+      const parameterRanges = rangeRows.filter((range) => range.parameterId === parameter.id);
+      const matchedRange =
+        (patientGender
+          ? parameterRanges.find((range) =>
+              range.gender === patientGender && ageMatchesProfile(range))
+          : undefined) ||
+        parameterRanges.find((range) =>
+          range.gender === "all" && ageMatchesProfile(range));
       return {
         ...parameter,
         effectiveReferenceLow: matchedRange
@@ -1094,15 +1111,20 @@ api.post("/orders/:orderId/items/:itemId/results", requireRole("admin", "technic
       if (parameter && Number.isFinite(numericValue)) {
         const patientGender = patient?.gender?.toLowerCase();
         const age = patient?.dateOfBirth ? calendarAge(patient.dateOfBirth, new Date()) : null;
-        matchedRange = rangeRows.find((range) => {
-          if (range.parameterId !== parameter.id) return false;
-          const genderMatches = range.gender === "all" || (patientGender != null && range.gender === patientGender);
-          const ageMatches = age === null
+        const ageMatchesProfile = (range: typeof parameterReferenceRanges.$inferSelect) =>
+          age === null
             ? range.ageMin === 0 && range.ageMax === null
             : age >= range.ageMin &&
-            (range.ageMax === null || age <= range.ageMax);
-          return genderMatches && ageMatches;
-        }) ?? null;
+              (range.ageMax === null || age <= range.ageMax);
+        const parameterRanges = rangeRows.filter((range) => range.parameterId === parameter.id);
+        matchedRange =
+          (patientGender
+            ? parameterRanges.find((range) =>
+                range.gender === patientGender && ageMatchesProfile(range))
+            : undefined) ||
+          parameterRanges.find((range) =>
+            range.gender === "all" && ageMatchesProfile(range)) ||
+          null;
       }
       if (parameter?.dataType === "number" && matchedRange && Number.isFinite(numericValue)) {
         referenceLow = matchedRange.referenceLow;
