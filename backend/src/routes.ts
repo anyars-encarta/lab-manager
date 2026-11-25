@@ -1243,6 +1243,15 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
     }
     pdf.moveDown();
   }
+  const signatureY = pdf.page.height - pdf.page.margins.bottom - 55;
+  pdf.moveTo(pdf.page.margins.left, signatureY);
+  pdf.lineTo(pdf.page.margins.left + 180, signatureY);
+  pdf.stroke();
+  pdf.y = signatureY + 8;
+  pdf.fontSize(10).text("Authorized Laboratory Scientist", {
+    width: 180,
+    align: "left",
+  });
   pdf.end();
 }));
 
