@@ -192,6 +192,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         ? `?${new URLSearchParams({
             page: String(orderPage),
             pageSize: String(orderPageSize),
+            ...(search.trim() ? { search: search.trim() } : {}),
           }).toString()}`
         : "";
       const response = await fetch(`${API_URL}${paths[section]}${query}`, {
@@ -315,6 +316,12 @@ export function LaboratoryWorkspace({ section }: Props) {
   useEffect(() => {
     if (section === "orders") void load();
   }, [section, orderPage, orderPageSize]);
+  useEffect(() => {
+    if (section === "orders") {
+      setOrderPage(1);
+      void load();
+    }
+  }, [search]);
 
   const uploadUserImage = async (file: File) => {
     if (!["image/png", "image/jpeg"].includes(file.type)) {
@@ -924,6 +931,7 @@ export function LaboratoryWorkspace({ section }: Props) {
             "facilities",
             "users",
             "reports",
+            "claims",
           ].includes(section) && (
             <Dialog open={dialogOpen} onOpenChange={(open) => {
               setDialogOpen(open);

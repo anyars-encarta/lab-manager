@@ -37,8 +37,11 @@ export const dataProvider: DataProvider = {
     const path = resourcePaths[resource] || `/api/${resource}`;
     const page = pagination?.currentPage ?? pagination?.current ?? 1;
     const pageSize = pagination?.pageSize ?? 100;
-    const data = await request<TData[]>(`${path}?page=${page}&pageSize=${pageSize}`);
-    return { data: Array.isArray(data) ? data : [], total: Array.isArray(data) ? data.length : 0 };
+    const response = await request<TData[] | { data: TData[]; total: number }>(`${path}?page=${page}&pageSize=${pageSize}`);
+    if (Array.isArray(response)) {
+      return { data: response, total: response.length };
+    }
+    return { data: Array.isArray(response.data) ? response.data : [], total: Number(response.total || 0) };
   },
   getOne: async <TData extends BaseRecord = BaseRecord>({ resource, id }: any) => {
     const path = resourcePaths[resource] || `/api/${resource}`;

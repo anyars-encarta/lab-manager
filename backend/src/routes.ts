@@ -834,11 +834,6 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
     claimCheckCode: z.string().trim().max(100).optional(),
     investigationIds: z.array(z.uuid()).min(1),
   }).parse(req.body);
-  if (body.isInsured) {
-    if (!body.nhisNumber?.trim()) return res.status(400).json({ error: "NHIS number is required for insured patients" });
-    if (!body.nhisStatus?.trim()) return res.status(400).json({ error: "NHIS status is required for insured patients" });
-    if (!body.claimCheckCode?.trim()) return res.status(400).json({ error: "Claims Check Code (CCC) is required for insured patients" });
-  }
   const selected = await db.select().from(investigations).where(sql`${investigations.id} in ${body.investigationIds}`);
   if (selected.length !== body.investigationIds.length) {
     return res.status(400).json({ error: "One or more investigations are invalid" });
@@ -848,20 +843,37 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, body.patientId) });
   if (!patient) return res.status(404).json({ error: "Patient not found" });
+  const effectiveNhisNumber = body.nhisNumber !== undefined
+    ? body.nhisNumber.trim() || null
+    : patient.nhisNumber;
+  const effectiveNhisStatus = body.nhisStatus !== undefined
+    ? body.nhisStatus.trim() || null
+    : patient.nhisStatus;
+  const effectiveIsInsured = body.isInsured ?? patient.isInsured;
+  if (effectiveIsInsured) {
+    if (!effectiveNhisNumber) return res.status(400).json({ error: "NHIS number is required for insured patients" });
+    if (!effectiveNhisStatus) return res.status(400).json({ error: "NHIS status is required for insured patients" });
+    if (!body.claimCheckCode?.trim()) return res.status(400).json({ error: "Claims Check Code (CCC) is required for insured patients" });
+  }
   const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
   const order = await db.transaction(async (tx) => {
     if (body.isInsured !== undefined) {
       await tx.update(patients).set({
         isInsured: body.isInsured,
-        nhisNumber: body.nhisNumber?.trim() || null,
-        nhisStatus: body.nhisStatus?.trim() || null,
+        nhisNumber: effectiveNhisNumber,
+        nhisStatus: effectiveNhisStatus,
+      }).where(eq(patients.id, patient.id));
+    } else if (body.nhisNumber !== undefined || body.nhisStatus !== undefined) {
+      await tx.update(patients).set({
+        nhisNumber: effectiveNhisNumber,
+        nhisStatus: effectiveNhisStatus,
       }).where(eq(patients.id, patient.id));
     }
     const [createdOrder] = await tx.insert(labOrders).values({
       orderNumber: prefixNumber("LAB"),
       claimId: prefixNumber("CLA"),
       claimCheckCode: body.claimCheckCode?.trim() || null,
-      isInsured: body.isInsured ?? patient.isInsured,
+      isInsured: effectiveIsInsured,
       patientId: body.patientId,
       facilityId: body.facilityId,
       createdBy: req.appUser!.id,
@@ -883,6 +895,7 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
 api.get("/orders", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
   const page = Math.max(1, Number(req.query.page || 1) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
   const offset = (page - 1) * pageSize;
@@ -890,14 +903,34 @@ api.get("/orders", asyncRoute(async (req, res) => {
   const statusFilter = status && statusValues.includes(status as typeof statusValues[number])
     ? status as typeof statusValues[number]
     : undefined;
-  const where = statusFilter ? eq(labOrders.status, statusFilter) : undefined;
+  const statusWhere = statusFilter ? eq(labOrders.status, statusFilter) : undefined;
+  let matchingPatientIds: string[] = [];
+  if (search) {
+    const matchingPatients = await db.select({ id: patients.id }).from(patients).where(or(
+      ilike(patients.firstName, `%${search}%`),
+      ilike(patients.lastName, `%${search}%`),
+      ilike(sql<string>`concat(${patients.firstName}, ' ', ${patients.lastName})`, `%${search}%`),
+      ilike(patients.patientNumber, `%${search}%`),
+      ilike(patients.nhisNumber, `%${search}%`),
+    ));
+    matchingPatientIds = matchingPatients.map((patient) => patient.id);
+  }
+  const searchWhere = search
+    ? or(
+        ilike(labOrders.orderNumber, `%${search}%`),
+        ilike(labOrders.clinicianName, `%${search}%`),
+        matchingPatientIds.length ? sql`${labOrders.patientId} in ${matchingPatientIds}` : undefined,
+      )
+    : undefined;
+  const where = and(statusWhere, searchWhere);
   const [allRows, countRows] = await Promise.all([
     db.select().from(labOrders)
       .where(where)
       .orderBy(desc(labOrders.createdAt))
       .limit(pageSize)
       .offset(offset),
-    db.select({ count: sql<number>`count(*)::int` }).from(labOrders).where(where),
+    db.select({ count: sql<number>`count(*)::int` }).from(labOrders)
+      .where(where),
   ]);
   const rows = allRows;
   const patientIds = [...new Set(rows.map((row) => row.patientId))];
