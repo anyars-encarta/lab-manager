@@ -111,6 +111,9 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [claimTotal, setClaimTotal] = useState(0);
   const [claimGrandTotal, setClaimGrandTotal] = useState("0.00");
   const [claimDetails, setClaimDetails] = useState<any>(null);
+  const [orderPage, setOrderPage] = useState(1);
+  const [orderPageSize, setOrderPageSize] = useState(20);
+  const [orderTotal, setOrderTotal] = useState(0);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [facilities, setFacilities] = useState<any[]>([]);
@@ -174,6 +177,11 @@ export function LaboratoryWorkspace({ section }: Props) {
             ...(claimFrom ? { from: claimFrom } : {}),
             ...(claimTo ? { to: claimTo } : {}),
           }).toString()}`
+        : section === "orders"
+        ? `?${new URLSearchParams({
+            page: String(orderPage),
+            pageSize: String(orderPageSize),
+          }).toString()}`
         : "";
       const response = await fetch(`${API_URL}${paths[section]}${query}`, {
         credentials: "include",
@@ -185,6 +193,9 @@ export function LaboratoryWorkspace({ section }: Props) {
         setRows(Array.isArray(data.data) ? data.data : []);
         setClaimTotal(Number(data.total || 0));
         setClaimGrandTotal(String(data.grandTotal || "0.00"));
+      } else if (section === "orders" && data && !Array.isArray(data)) {
+        setRows(Array.isArray(data.data) ? data.data : []);
+        setOrderTotal(Number(data.total || 0));
       } else {
         setRows(Array.isArray(data) ? data : data ? [data] : []);
       }
@@ -289,6 +300,10 @@ export function LaboratoryWorkspace({ section }: Props) {
   useEffect(() => {
     if (section === "claims") void load();
   }, [section, claimPage, claimPageSize, claimFrom, claimTo]);
+
+  useEffect(() => {
+    if (section === "orders") void load();
+  }, [section, orderPage, orderPageSize]);
 
   const uploadUserImage = async (file: File) => {
     if (!["image/png", "image/jpeg"].includes(file.type)) {
@@ -1155,6 +1170,8 @@ export function LaboratoryWorkspace({ section }: Props) {
                 <CardDescription>
                   {section === "claims"
                     ? `${claimTotal} record(s) · Grand Total: GH₵ ${Number(claimGrandTotal).toFixed(2)}`
+                    : section === "orders"
+                    ? `${orderTotal} record(s)`
                     : `${filtered.length} record(s)`}
                 </CardDescription>
               </div>
@@ -1267,6 +1284,21 @@ export function LaboratoryWorkspace({ section }: Props) {
                   setClaimPage(1);
                 }}
                 total={claimTotal}
+              />
+            </div>
+          )}
+          {section === "orders" && (
+            <div className="border-t px-4 py-3">
+              <DataTablePagination
+                currentPage={orderPage}
+                pageCount={Math.max(1, Math.ceil(orderTotal / orderPageSize))}
+                setCurrentPage={setOrderPage}
+                pageSize={orderPageSize}
+                setPageSize={(size) => {
+                  setOrderPageSize(size);
+                  setOrderPage(1);
+                }}
+                total={orderTotal}
               />
             </div>
           )}

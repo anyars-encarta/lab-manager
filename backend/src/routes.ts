@@ -883,17 +883,37 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
 api.get("/orders", asyncRoute(async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  const allRows = await db.select().from(labOrders).orderBy(desc(labOrders.createdAt)).limit(200);
-  const rows = status ? allRows.filter((row) => row.status === status) : allRows;
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
+  const statusValues = ["draft", "awaiting_payment", "paid", "processing", "completed", "cancelled"] as const;
+  const statusFilter = status && statusValues.includes(status as typeof statusValues[number])
+    ? status as typeof statusValues[number]
+    : undefined;
+  const where = statusFilter ? eq(labOrders.status, statusFilter) : undefined;
+  const [allRows, countRows] = await Promise.all([
+    db.select().from(labOrders)
+      .where(where)
+      .orderBy(desc(labOrders.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(labOrders).where(where),
+  ]);
+  const rows = allRows;
   const patientIds = [...new Set(rows.map((row) => row.patientId))];
   const patientRows = patientIds.length
     ? await db.select().from(patients).where(sql`${patients.id} in ${patientIds}`)
     : [];
   const patientsById = new Map(patientRows.map((patient) => [patient.id, patient]));
-  res.json(rows.map((row) => ({
+  res.json({
+    data: rows.map((row) => ({
     ...row,
     patient: patientsById.get(row.patientId) || null,
-  })));
+    })),
+    page,
+    pageSize,
+    total: Number(countRows[0]?.count || 0),
+  });
 }));
 
 api.get("/orders/:id", asyncRoute(async (req, res) => {
