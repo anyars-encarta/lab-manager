@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import {
   Building2,
+  Check,
+  ChevronsUpDown,
   ClipboardList,
   Download,
   Edit,
@@ -57,6 +59,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -1638,21 +1649,44 @@ function Field({
 }
 
 function FacilityField({ facilities }: { facilities: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = facilities.find((facility) => facility.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="facilityId">Facility</Label>
-      <Select name="facilityId" required>
-        <SelectTrigger id="facilityId">
-          <SelectValue placeholder="Select facility" />
-        </SelectTrigger>
-        <SelectContent>
-          {facilities.map((facility) => (
-            <SelectItem key={facility.id} value={facility.id}>
-              {facility.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="facilityId" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected ? `${selected.name}${selected.code ? ` — ${selected.code}` : ""}` : "Select facility"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search facilities..." />
+            <CommandList>
+              <CommandEmpty>No facility found.</CommandEmpty>
+              <CommandGroup>
+                {facilities.map((facility) => (
+                  <CommandItem
+                    key={facility.id}
+                    value={`${facility.name} ${facility.code || ""}`}
+                    onSelect={() => {
+                      setValue(facility.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check className={`mr-2 h-4 w-4 ${value === facility.id ? "opacity-100" : "opacity-0"}`} />
+                    {facility.name}{facility.code ? ` — ${facility.code}` : ""}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -1680,46 +1714,96 @@ function RoleField({ defaultValue }: { defaultValue?: string }) {
 }
 
 function PatientField({ patients }: { patients: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = patients.find((patient) => patient.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="patientId">Patient</Label>
-      <Select name="patientId" required>
-        <SelectTrigger id="patientId">
-          <SelectValue placeholder="Select patient" />
-        </SelectTrigger>
-        <SelectContent>
-          {patients.map((patient) => (
-            <SelectItem key={patient.id} value={patient.id}>
-              {patient.firstName} {patient.lastName} — {patient.patientNumber}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="patientId" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected ? `${selected.firstName} ${selected.lastName} — ${selected.patientNumber}` : "Select patient"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search name or patient number..." />
+            <CommandList>
+              <CommandEmpty>No patient found.</CommandEmpty>
+              <CommandGroup>
+                {patients.map((patient) => (
+                  <CommandItem
+                    key={patient.id}
+                    value={`${patient.firstName} ${patient.lastName} ${patient.patientNumber} ${patient.nhisNumber || ""}`}
+                    onSelect={() => {
+                      setValue(patient.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check className={`mr-2 h-4 w-4 ${value === patient.id ? "opacity-100" : "opacity-0"}`} />
+                    {patient.firstName} {patient.lastName} — {patient.patientNumber}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
 
 function InvestigationField({ investigations }: { investigations: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = investigations.find((item) => item.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="investigationIds">Investigations</Label>
-      <Select name="investigationIds" required>
-        <SelectTrigger id="investigationIds">
-          <SelectValue placeholder="Select investigation" />
-        </SelectTrigger>
-        <SelectContent>
-          {investigations.map((item) => {
-            const charge = item.covered
-              ? Number(item.topUp || 0)
-              : Number(item.uncoveredTariff || 0);
-            return (
-              <SelectItem key={item.id} value={item.id}>
-                {item.name} — GH₵ {charge.toFixed(2)}
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="investigationIds" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected
+              ? `${selected.name} — GH₵ ${(selected.covered
+                  ? Number(selected.topUp || 0)
+                  : Number(selected.uncoveredTariff || 0)).toFixed(2)}`
+              : "Select investigation"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search investigations..." />
+            <CommandList>
+              <CommandEmpty>No investigation found.</CommandEmpty>
+              <CommandGroup>
+                {investigations.map((item) => {
+                  const charge = item.covered
+                    ? Number(item.topUp || 0)
+                    : Number(item.uncoveredTariff || 0);
+                  return (
+                    <CommandItem
+                      key={item.id}
+                      value={`${item.name} ${item.gdrgCode || ""} ${item.code || ""}`}
+                      onSelect={() => {
+                        setValue(item.id);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check className={`mr-2 h-4 w-4 ${value === item.id ? "opacity-100" : "opacity-0"}`} />
+                      {item.name} — GH₵ {charge.toFixed(2)}
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
