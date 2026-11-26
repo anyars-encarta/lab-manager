@@ -86,7 +86,7 @@ const titles = {
   facilities: ["Facilities", "Manage laboratory facility details", Building2],
   users: ["User management", "Create accounts and assign roles", UserCog],
   reports: ["Reports", "Generate laboratory activity reports", FlaskConical],
-  claims: ["NHIA claims", "Generate Ghana NHIA claim batches", ShieldCheck],
+  claims: ["NHIA claims", "Generate NHIA claim batches", ShieldCheck],
 } as const;
 
 export function LaboratoryWorkspace({ section }: Props) {
