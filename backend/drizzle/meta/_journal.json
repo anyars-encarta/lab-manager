@@ -71,6 +71,13 @@
       "when": 1795455213320,
       "tag": "0009_nhia_claim_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795455213321,
+      "tag": "0010_patient_insurance_fields",
+      "breakpoints": true
     }
   ]
 }

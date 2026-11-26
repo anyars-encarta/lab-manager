@@ -30,6 +30,8 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
   };
 
 const numberValue = (value: unknown) => Number(value ?? 0);
+const coveredInvestigationCost = (item: typeof investigations.$inferSelect) =>
+  numberValue(item.coveredTariff);
 const xmlEscape = (value: unknown) => String(value ?? "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
@@ -721,7 +723,12 @@ api.post("/patients", requireRole("admin", "frontdesk"), asyncRoute(async (req, 
     address: z.string().optional(),
     nhisNumber: z.string().optional(),
     nhisStatus: z.string().optional(),
+    isInsured: z.boolean().optional(),
   }).parse(req.body);
+  if (body.isInsured) {
+    if (!body.nhisNumber?.trim()) return res.status(400).json({ error: "NHIS number is required for insured patients" });
+    if (!body.nhisStatus?.trim()) return res.status(400).json({ error: "NHIS status is required for insured patients" });
+  }
   const [created] = await db.insert(patients).values({
     ...body,
     patientNumber: prefixNumber("PAT"),
@@ -742,11 +749,17 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
     address: z.string().optional(),
     nhisNumber: z.string().optional(),
     nhisStatus: z.string().optional(),
+    isInsured: z.boolean(),
     claimCheckCode: z.string().optional(),
     clinicianName: z.string().optional(),
     notes: z.string().optional(),
     investigationIds: z.array(z.uuid()).min(1),
   }).parse(req.body);
+  if (body.isInsured) {
+    if (!body.nhisNumber?.trim()) return res.status(400).json({ error: "NHIS number is required for insured patients" });
+    if (!body.nhisStatus?.trim()) return res.status(400).json({ error: "NHIS status is required for insured patients" });
+    if (!body.claimCheckCode?.trim()) return res.status(400).json({ error: "Claims Check Code (CCC) is required for insured patients" });
+  }
 
   const uniqueInvestigationIds = [...new Set(body.investigationIds)];
   const selected = await db.select().from(investigations).where(sql`${investigations.id} in ${uniqueInvestigationIds}`);
@@ -771,6 +784,7 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
       address: body.address,
       nhisNumber: body.nhisNumber,
       nhisStatus: body.nhisStatus,
+      isInsured: body.isInsured,
     }).returning();
 
     const [order] = await tx.insert(labOrders).values({
@@ -808,9 +822,17 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
     patientId: z.uuid(),
     clinicianName: z.string().optional(),
     notes: z.string().optional(),
+    isInsured: z.boolean().optional(),
+    nhisNumber: z.string().optional(),
+    nhisStatus: z.string().optional(),
     claimCheckCode: z.string().optional(),
     investigationIds: z.array(z.uuid()).min(1),
   }).parse(req.body);
+  if (body.isInsured) {
+    if (!body.nhisNumber?.trim()) return res.status(400).json({ error: "NHIS number is required for insured patients" });
+    if (!body.nhisStatus?.trim()) return res.status(400).json({ error: "NHIS status is required for insured patients" });
+    if (!body.claimCheckCode?.trim()) return res.status(400).json({ error: "Claims Check Code (CCC) is required for insured patients" });
+  }
   const selected = await db.select().from(investigations).where(sql`${investigations.id} in ${body.investigationIds}`);
   if (selected.length !== body.investigationIds.length) {
     return res.status(400).json({ error: "One or more investigations are invalid" });
@@ -820,6 +842,13 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, body.patientId) });
   if (!patient) return res.status(404).json({ error: "Patient not found" });
+  if (body.isInsured !== undefined) {
+    await db.update(patients).set({
+      isInsured: body.isInsured,
+      nhisNumber: body.nhisNumber?.trim() || null,
+      nhisStatus: body.nhisStatus?.trim() || null,
+    }).where(eq(patients.id, patient.id));
+  }
 
   const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
   const [order] = await db.insert(labOrders).values({
@@ -1348,10 +1377,114 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
   });
 }));
 
+api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, res) => {
+ const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
+ const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
+ const conditions = [
+   eq(patients.isInsured, true),
+ ];
+ if (from && !Number.isNaN(from.getTime())) conditions.push(gte(labOrders.createdAt, from));
+ if (to && !Number.isNaN(to.getTime())) conditions.push(lte(labOrders.createdAt, new Date(`${req.query.to}T23:59:59Z`)));
+
+ const attendanceRows = await db.select({
+   id: labOrders.id,
+   claimId: labOrders.claimId,
+   claimCheckCode: labOrders.claimCheckCode,
+   orderNumber: labOrders.orderNumber,
+   createdAt: labOrders.createdAt,
+   totalAmount: labOrders.totalAmount,
+   patientId: labOrders.patientId,
+ }).from(labOrders)
+   .innerJoin(patients, eq(labOrders.patientId, patients.id))
+   .where(and(...conditions))
+   .orderBy(desc(labOrders.createdAt))
+   .limit(500);
+
+ const claims = await Promise.all(attendanceRows.map(async ({ patientId, ...attendance }) => {
+   const patient = await db.query.patients.findFirst({ where: eq(patients.id, patientId) });
+   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, attendance.id));
+   const investigationRows = await Promise.all(items.map(async (item) => {
+     const investigationRow = await db.query.investigations.findFirst({
+       where: eq(investigations.id, item.investigationId),
+     });
+     return {
+       id: item.id,
+       name: investigationRow?.name || "",
+       gdrgCode: investigationRow?.gdrgCode || investigationRow?.nhiaCode || "",
+       amount: investigationRow ? coveredInvestigationCost(investigationRow).toFixed(2) : "0.00",
+     };
+   }));
+   const claimTotal = investigationRows.reduce(
+       (sum, item) => sum + numberValue(item.amount),
+       0,
+   );
+   const entries = items.length
+     ? await db.select().from(resultEntries)
+         .where(sql`${resultEntries.orderItemId} in ${items.map((item) => item.id)}`)
+         .orderBy(asc(resultEntries.enteredAt), asc(resultEntries.id))
+         .limit(1)
+     : [];
+   return {
+     ...attendance,
+     totalAmount: claimTotal.toFixed(2),
+     patientName: `${patient?.firstName || ""} ${patient?.lastName || ""}`.trim(),
+     nhisNumber: patient?.nhisNumber || "",
+     patientNumber: patient?.patientNumber || "",
+     dateOfBirth: patient?.dateOfBirth ? dateOnly(patient.dateOfBirth) : "",
+     gender: patient?.gender || "",
+     physicianId: entries[0]?.enteredBy || "",
+     investigations: investigationRows,
+   };
+ }));
+ res.json(claims);
+}));
+
+api.get("/nhia/claims/individual/:id/export", requireRole("admin"), asyncRoute(async (req, res) => {
+ const attendance = await db.query.labOrders.findFirst({ where: eq(labOrders.id, String(req.params.id)) });
+ if (!attendance) return res.status(404).json({ error: "Claim not found" });
+ const patient = await db.query.patients.findFirst({ where: eq(patients.id, attendance.patientId) });
+ if (!patient) return res.status(404).json({ error: "Patient not found" });
+ const items = await db.select().from(orderItems).where(eq(orderItems.orderId, attendance.id));
+ const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+ let physicianId = "";
+ if (items.length) {
+   const entries = await db.select().from(resultEntries)
+     .where(sql`${resultEntries.orderItemId} in ${items.map((item) => item.id)}`)
+     .orderBy(asc(resultEntries.enteredAt), asc(resultEntries.id))
+     .limit(1);
+   physicianId = entries[0]?.enteredBy || "";
+ }
+ const investigationXml = (await Promise.all(items.map(async (item) => {
+   const investigation = await db.query.investigations.findFirst({ where: eq(investigations.id, item.investigationId) });
+   return `<investigation><serviceDate>${xmlEscape(dateOnly(attendance.createdAt))}</serviceDate><gdrgCode>${xmlEscape(investigation?.gdrgCode || investigation?.nhiaCode || "")}</gdrgCode></investigation>`;
+ }))).join("");
+ const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<claims><claim>` +
+   `<claimID>${xmlEscape(attendance.claimId)}</claimID>` +
+   `<claimCheckCode>${xmlEscape(attendance.claimCheckCode)}</claimCheckCode>` +
+   `<preAuthorizationCodes>${xmlEscape(profile?.preAuthorizationCodes || "")}</preAuthorizationCodes>` +
+   `<physicianID>${xmlEscape(physicianId)}</physicianID>` +
+   `<memberNo>${xmlEscape(patient.nhisNumber)}</memberNo>` +
+   `<cardSerialNo/>` +
+   `<surname>${xmlEscape(patient.lastName)}</surname>` +
+   `<otherNames>${xmlEscape(patient.firstName)}</otherNames>` +
+   `<dateOfBirth>${xmlEscape(patient.dateOfBirth ? dateOnly(patient.dateOfBirth) : "")}</dateOfBirth>` +
+   `<gender>${xmlEscape((patient.gender || "").startsWith("F") ? "F" : (patient.gender || "").startsWith("M") ? "M" : (patient.gender || "").toUpperCase())}</gender>` +
+   `<hospitalRecNo>${xmlEscape(patient.patientNumber)}</hospitalRecNo>` +
+   `<isDependant>${isUnderThreeMonths(patient.dateOfBirth, attendance.createdAt) ? "1" : "0"}</isDependant>` +
+   `<typeOfService>DIA</typeOfService><isUnbundled>1</isUnbundled><includesPharmacy>0</includesPharmacy>` +
+   `<typeOfAttendance>EAE</typeOfAttendance><serviceOutcome>DISC</serviceOutcome>` +
+   `<dateOfService>${xmlEscape(dateOnly(attendance.createdAt))}</dateOfService>` +
+   `<specialtyAttended>INVE</specialtyAttended>${investigationXml}` +
+   `<referralInfo><claimCheckCode/><facilityID/><facilityName/></referralInfo>` +
+   `</claim></claims>`;
+ res.setHeader("Content-Type", "application/xml; charset=utf-8");
+ res.setHeader("Content-Disposition", `attachment; filename="${attendance.claimId}.xml"`);
+ res.send(xml);
+}));
+
 api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res) => {
   const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
   const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
-  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : undefined;
   if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return res.status(400).json({ error: "A valid from and to date range is required" });
   }
@@ -1361,7 +1494,6 @@ api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res)
     gte(labOrders.createdAt, from),
     lte(labOrders.createdAt, to),
   ];
-  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
   const attendanceRows = await db.select().from(labOrders).where(and(...conditions)).orderBy(asc(labOrders.createdAt));
   const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
 
@@ -1437,14 +1569,14 @@ api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res)
 
 api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
-    facilityId: z.uuid(),
     claimPeriodStart: z.iso.datetime(),
     claimPeriodEnd: z.iso.datetime(),
   }).parse(req.body);
   const start = new Date(body.claimPeriodStart);
   const end = new Date(body.claimPeriodEnd);
+  const batchFacility = (await db.select().from(facilities).orderBy(asc(facilities.name)).limit(1))[0];
+  if (!batchFacility) return res.status(400).json({ error: "At least one facility is required" });
   const eligibleOrders = await db.select().from(labOrders).where(and(
-    eq(labOrders.facilityId, body.facilityId),
     gte(labOrders.createdAt, start),
     lte(labOrders.createdAt, end),
   ));
@@ -1490,7 +1622,7 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
           gdrgCode: investigation?.gdrgCode || investigation?.nhiaCode || "",
           nhiaCode: investigation?.nhiaCode ?? null,
           name: investigation?.name,
-          amount: item.lineTotal,
+          amount: investigation ? coveredInvestigationCost(investigation).toFixed(2) : "0.00",
         };
       })),
     };
@@ -1498,7 +1630,7 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
   const total = nhiaPayload.reduce((sum, claim) => sum + claim.investigations.reduce((itemSum, item) => itemSum + numberValue(item.amount), 0), 0);
   const [created] = await db.insert(nhiaClaims).values({
     claimNumber: prefixNumber("NHIA"),
-    facilityId: body.facilityId,
+    facilityId: batchFacility.id,
     claimPeriodStart: start,
     claimPeriodEnd: end,
     payload: nhiaPayload,

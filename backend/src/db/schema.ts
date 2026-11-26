@@ -140,6 +140,7 @@ export const patients = pgTable("patients", {
   address: text("address"),
   nhisNumber: varchar("nhis_number", { length: 50 }),
   nhisStatus: varchar("nhis_status", { length: 30 }),
+  isInsured: boolean("is_insured").notNull().default(false),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

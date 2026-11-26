@@ -8,6 +8,7 @@ import {
   Edit,
   FlaskConical,
   FileText,
+  Eye,
   Microscope,
   Plus,
   Search,
@@ -102,6 +103,7 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [claimsMode, setClaimsMode] = useState<"generate" | "export">("generate");
+  const [claimDetails, setClaimDetails] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [facilities, setFacilities] = useState<any[]>([]);
@@ -156,7 +158,7 @@ export function LaboratoryWorkspace({ section }: Props) {
         facilities: "/api/facilities",
         users: "/api/users",
         reports: "/api/reports/summary",
-        claims: "/api/nhia/claims",
+        claims: "/api/nhia/claims/individual",
       };
       const response = await fetch(`${API_URL}${paths[section]}`, {
         credentials: "include",
@@ -369,7 +371,6 @@ export function LaboratoryWorkspace({ section }: Props) {
           const params = new URLSearchParams({
             from: String(values.from),
             to: String(values.to),
-            facilityId: String(values.facilityId),
           });
           const response = await fetch(`${API_URL}/api/nhia/claims/export?${params}`, {
             credentials: "include",
@@ -397,7 +398,6 @@ export function LaboratoryWorkspace({ section }: Props) {
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            facilityId: values.facilityId,
             claimPeriodStart: new Date(
               `${values.from}T00:00:00Z`,
             ).toISOString(),
@@ -770,6 +770,29 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const exportIndividualClaim = async (claim: any) => {
+    try {
+      const response = await fetch(`${API_URL}/api/nhia/claims/individual/${claim.id}/export`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error((await response.json()).error || "Unable to export claim");
+      }
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = `${claim.claimId}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+      toast.success("NHIA claim exported");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to export claim");
+    }
+  };
+
   const openLaboratoryReport = async (order: any, download = false) => {
     try {
       const response = await fetch(`${API_URL}/api/orders/${order.id}/report`, {
@@ -998,7 +1021,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                         <InvestigationField investigations={investigations} />
                       </>
                     )}
-                    {(section === "claims" || section === "reports") && (
+                    {section === "reports" && (
                       <>
                         <FacilityField facilities={facilities} />
                         <div className="grid grid-cols-2 gap-3">
@@ -1011,6 +1034,17 @@ export function LaboratoryWorkspace({ section }: Props) {
                           <Field name="to" label="To" type="date" required />
                         </div>
                       </>
+                    )}
+                    {section === "claims" && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field
+                          name="from"
+                          label="From"
+                          type="date"
+                          required
+                        />
+                        <Field name="to" label="To" type="date" required />
+                      </div>
                     )}
                   </div>
                   {submissionError && (
@@ -1117,6 +1151,8 @@ export function LaboratoryWorkspace({ section }: Props) {
                 onCaptureResults={(order) => void openResults(order)}
                 onOpenReport={(order) => void openLaboratoryReport(order)}
                 onDownloadReport={(order) => void openLaboratoryReport(order, true)}
+                onViewClaim={(claim) => setClaimDetails(claim)}
+                onExportClaim={(claim) => void exportIndividualClaim(claim)}
                 onEditUser={(user) => {
                   invalidateUserUploadSession();
                   setEditingUser(user);
@@ -1144,6 +1180,42 @@ export function LaboratoryWorkspace({ section }: Props) {
           </CardContent>
         </Card>
       )}
+      <Dialog open={claimDetails != null} onOpenChange={(open) => !open && setClaimDetails(null)}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>NHIA claim details</DialogTitle>
+            <DialogDescription>
+              {claimDetails?.claimId || "Individual claim"}
+            </DialogDescription>
+          </DialogHeader>
+          {claimDetails && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><span className="text-muted-foreground">Patient</span><p className="font-medium">{claimDetails.patientName}</p></div>
+                <div><span className="text-muted-foreground">NHIA number</span><p className="font-medium">{claimDetails.nhisNumber || "—"}</p></div>
+                <div><span className="text-muted-foreground">Patient number</span><p className="font-medium">{claimDetails.patientNumber || "—"}</p></div>
+                <div><span className="text-muted-foreground">CCC</span><p className="font-medium">{claimDetails.claimCheckCode || "—"}</p></div>
+                <div><span className="text-muted-foreground">Service date</span><p className="font-medium">{claimDetails.createdAt ? new Date(claimDetails.createdAt).toLocaleDateString() : "—"}</p></div>
+                <div><span className="text-muted-foreground">Total cost</span><p className="font-medium">GH₵ {Number(claimDetails.totalAmount || 0).toFixed(2)}</p></div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-medium">Investigations</p>
+                <div className="space-y-2">
+                  {claimDetails.investigations?.map((item: any) => (
+                    <div key={item.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <div><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">G-DRG: {item.gdrgCode || "—"}</p></div>
+                      <span>GH₵ {Number(item.amount || 0).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setClaimDetails(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={resultOrder != null}
         onOpenChange={(open) => {
@@ -1540,6 +1612,8 @@ function RecordTable({
   onDownloadReport,
   onEditUser,
   onToggleUser,
+  onViewClaim,
+  onExportClaim,
 }: {
   section: Props["section"];
   rows: any[];
@@ -1552,6 +1626,8 @@ function RecordTable({
   onDownloadReport?: (order: any) => void;
   onEditUser?: (user: any) => void;
   onToggleUser?: (user: any) => void;
+  onViewClaim?: (claim: any) => void;
+  onExportClaim?: (claim: any) => void;
 }) {
   const patientName = (row: any) =>
     `${row.firstName || ""} ${row.lastName || ""}`.trim();
@@ -1578,11 +1654,11 @@ function RecordTable({
     facilities: ["name", "code", "phone", "nhiaFacilityCode"],
     users: ["name", "email", "role", "active"],
     claims: [
-      "claimNumber",
-      "status",
+      "claimId",
+      "patientName",
+      "nhisNumber",
       "totalAmount",
-      "claimPeriodStart",
-      "claimPeriodEnd",
+      "createdAt",
     ],
     reports: ["name"],
   };
@@ -1590,6 +1666,7 @@ function RecordTable({
     ...columns[section],
     ...(section === "orders" ? ["actions"] : []),
     ...(section === "users" ? ["actions"] : []),
+    ...(section === "claims" ? ["actions"] : []),
   ];
   return (
     <Table>
@@ -1599,6 +1676,12 @@ function RecordTable({
             <TableHead key={column}>
               {column === "nhisNumber"
                 ? "NHIS"
+                : column === "claimId"
+                ? "Claim ID"
+                : column === "patientName"
+                ? "Patient Name"
+                : column === "totalAmount"
+                ? "Total Cost"
                 : column === "paymentStatus"
                 ? "Payment"
                 : column === "actions"
@@ -1616,7 +1699,28 @@ function RecordTable({
             {tableColumns.map((column) => (
               <TableCell key={column}>
                 {column === "actions" ? (
-                  section === "users" ? (
+                  section === "claims" ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="cursor-pointer"
+                        onClick={() => onViewClaim?.(row)}
+                      >
+                        <Eye className="mr-1 h-3.5 w-3.5" />
+                        View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="cursor-pointer"
+                        onClick={() => onExportClaim?.(row)}
+                      >
+                        <Download className="mr-1 h-3.5 w-3.5" />
+                        Export XML
+                      </Button>
+                    </div>
+                  ) : section === "users" ? (
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
