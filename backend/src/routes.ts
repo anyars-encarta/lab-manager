@@ -30,6 +30,18 @@ const asyncRoute = (handler: (req: Request, res: Response) => Promise<unknown>) 
   };
 
 const numberValue = (value: unknown) => Number(value ?? 0);
+const xmlEscape = (value: unknown) => String(value ?? "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+const isUnderThreeMonths = (birthDate: Date | null, at: Date = new Date()) => {
+  if (!birthDate) return false;
+  const cutoff = new Date(at);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 3);
+  return birthDate > cutoff;
+};
 const investigationCharge = (item: typeof investigations.$inferSelect) =>
   item.covered
     ? numberValue(item.topUp)
@@ -367,6 +379,7 @@ api.put("/laboratory-profile", requireRole("admin"), asyncRoute(async (req, res)
     email: z.union([z.email(), z.literal("")]).nullable().optional(),
     slogan: z.string().nullable().optional(),
     currency: z.string().min(3).max(10).optional(),
+    preAuthorizationCodes: z.string().nullable().optional(),
   }).parse(req.body);
   const values = {
     name: body.name,
@@ -376,6 +389,7 @@ api.put("/laboratory-profile", requireRole("admin"), asyncRoute(async (req, res)
     email: body.email || null,
     slogan: body.slogan || null,
     currency: body.currency || "GHS",
+    preAuthorizationCodes: body.preAuthorizationCodes?.trim() || null,
   };
   const existing = (await db.select().from(laboratoryProfiles).limit(1))[0];
   const [saved] = existing
@@ -728,6 +742,7 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
     address: z.string().optional(),
     nhisNumber: z.string().optional(),
     nhisStatus: z.string().optional(),
+    claimCheckCode: z.string().optional(),
     clinicianName: z.string().optional(),
     notes: z.string().optional(),
     investigationIds: z.array(z.uuid()).min(1),
@@ -760,6 +775,8 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
 
     const [order] = await tx.insert(labOrders).values({
       orderNumber: prefixNumber("LAB"),
+      claimId: prefixNumber("CLA"),
+      claimCheckCode: body.claimCheckCode?.trim() || null,
       patientId: patient.id,
       facilityId: body.facilityId,
       createdBy: req.appUser!.id,
@@ -791,6 +808,7 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
     patientId: z.uuid(),
     clinicianName: z.string().optional(),
     notes: z.string().optional(),
+    claimCheckCode: z.string().optional(),
     investigationIds: z.array(z.uuid()).min(1),
   }).parse(req.body);
   const selected = await db.select().from(investigations).where(sql`${investigations.id} in ${body.investigationIds}`);
@@ -806,6 +824,8 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
   const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
   const [order] = await db.insert(labOrders).values({
     orderNumber: prefixNumber("LAB"),
+    claimId: prefixNumber("CLA"),
+    claimCheckCode: body.claimCheckCode?.trim() || null,
     patientId: body.patientId,
     facilityId: body.facilityId,
     createdBy: req.appUser!.id,
@@ -1328,6 +1348,93 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
   });
 }));
 
+api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res) => {
+  const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
+  const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
+  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : undefined;
+  if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return res.status(400).json({ error: "A valid from and to date range is required" });
+  }
+  if (from > to) return res.status(400).json({ error: "The from date cannot be after the to date" });
+
+  const conditions = [
+    gte(labOrders.createdAt, from),
+    lte(labOrders.createdAt, to),
+  ];
+  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+  const attendanceRows = await db.select().from(labOrders).where(and(...conditions)).orderBy(asc(labOrders.createdAt));
+  const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
+
+  const visitCounts = new Map<string, number>();
+  for (const attendance of attendanceRows) {
+    const key = `${attendance.patientId}:${dateOnly(attendance.createdAt)}`;
+    visitCounts.set(key, (visitCounts.get(key) || 0) + 1);
+  }
+
+  const claims = await Promise.all(attendanceRows.map(async (attendance) => {
+    const patient = await db.query.patients.findFirst({ where: eq(patients.id, attendance.patientId) });
+    const items = await db.select().from(orderItems).where(eq(orderItems.orderId, attendance.id));
+    let physicianId = "";
+    if (items.length) {
+      const itemIds = items.map((item) => item.id);
+      const entries = await db.select().from(resultEntries)
+        .where(sql`${resultEntries.orderItemId} in ${itemIds}`)
+        .orderBy(asc(resultEntries.enteredAt), asc(resultEntries.id))
+        .limit(1);
+      physicianId = entries[0]?.enteredBy || "";
+    }
+
+    const investigationRows = await Promise.all(items.map(async (item) => {
+      const investigation = await db.query.investigations.findFirst({
+        where: eq(investigations.id, item.investigationId),
+      });
+      return {
+        serviceDate: dateOnly(attendance.createdAt),
+        gdrgCode: investigation?.gdrgCode || investigation?.nhiaCode || "",
+      };
+    }));
+
+    const dob = patient?.dateOfBirth ? dateOnly(patient.dateOfBirth) : "";
+    const gender = (patient?.gender || "").trim().toUpperCase();
+    const normalizedGender = gender.startsWith("M") ? "M" : gender.startsWith("F") ? "F" : gender;
+    const serviceDate = dateOnly(attendance.createdAt);
+    const visitCount = visitCounts.get(`${attendance.patientId}:${serviceDate}`) || 1;
+    const repeatedDates = Array.from({ length: visitCount }, () => serviceDate);
+    const investigationXml = investigationRows.map((investigation) =>
+      `<investigation><serviceDate>${xmlEscape(investigation.serviceDate)}</serviceDate><gdrgCode>${xmlEscape(investigation.gdrgCode)}</gdrgCode></investigation>`
+    ).join("");
+
+    return `<claim>` +
+      `<claimID>${xmlEscape(attendance.claimId)}</claimID>` +
+      `<claimCheckCode>${xmlEscape(attendance.claimCheckCode)}</claimCheckCode>` +
+      `<preAuthorizationCodes>${xmlEscape(profile?.preAuthorizationCodes || "")}</preAuthorizationCodes>` +
+      `<physicianID>${xmlEscape(physicianId)}</physicianID>` +
+      `<memberNo>${xmlEscape(patient?.nhisNumber)}</memberNo>` +
+      `<cardSerialNo/>` +
+      `<surname>${xmlEscape(patient?.lastName)}</surname>` +
+      `<otherNames>${xmlEscape(patient?.firstName)}</otherNames>` +
+      `<dateOfBirth>${xmlEscape(dob)}</dateOfBirth>` +
+      `<gender>${xmlEscape(normalizedGender)}</gender>` +
+      `<hospitalRecNo>${xmlEscape(patient?.patientNumber)}</hospitalRecNo>` +
+      `<isDependant>${isUnderThreeMonths(patient?.dateOfBirth || null, attendance.createdAt) ? "1" : "0"}</isDependant>` +
+      `<typeOfService>DIA</typeOfService>` +
+      `<isUnbundled>1</isUnbundled>` +
+      `<includesPharmacy>0</includesPharmacy>` +
+      `<typeOfAttendance>EAE</typeOfAttendance>` +
+      `<serviceOutcome>DISC</serviceOutcome>` +
+      repeatedDates.map((date) => `<dateOfService>${xmlEscape(date)}</dateOfService>`).join("") +
+      `<specialtyAttended>INVE</specialtyAttended>` +
+      investigationXml +
+      `<referralInfo><claimCheckCode/><facilityID/><facilityName/></referralInfo>` +
+      `</claim>`;
+  }));
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<claims>${claims.join("")}</claims>`;
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="nhia-claims-${req.query.from}-${req.query.to}.xml"`);
+  res.send(xml);
+}));
+
 api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
   const body = z.object({
     facilityId: z.uuid(),
@@ -1341,16 +1448,50 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
     gte(labOrders.createdAt, start),
     lte(labOrders.createdAt, end),
   ));
+  const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
   const nhiaPayload = await Promise.all(eligibleOrders.map(async (order) => {
     const patient = await db.query.patients.findFirst({ where: eq(patients.id, order.patientId) });
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+    let physicianId = "";
+    if (items.length) {
+      const entries = await db.select().from(resultEntries)
+        .where(sql`${resultEntries.orderItemId} in ${items.map((item) => item.id)}`)
+        .orderBy(asc(resultEntries.enteredAt), asc(resultEntries.id))
+        .limit(1);
+      physicianId = entries[0]?.enteredBy || "";
+    }
     return {
       orderNumber: order.orderNumber,
+      claimId: order.claimId,
+      claimCheckCode: order.claimCheckCode || "",
+      preAuthorizationCodes: profile?.preAuthorizationCodes || "",
+      physicianId,
       nhisNumber: patient?.nhisNumber ?? null,
       patientName: `${patient?.firstName ?? ""} ${patient?.lastName ?? ""}`.trim(),
+      surname: patient?.lastName || "",
+      otherNames: patient?.firstName || "",
+      dateOfBirth: patient?.dateOfBirth ? dateOnly(patient.dateOfBirth) : "",
+      gender: (patient?.gender || "").toUpperCase().startsWith("F") ? "F"
+        : (patient?.gender || "").toUpperCase().startsWith("M") ? "M"
+        : patient?.gender || "",
+      hospitalRecNo: patient?.patientNumber || "",
+      isDependant: patient?.dateOfBirth ? (isUnderThreeMonths(patient.dateOfBirth, order.createdAt) ? 1 : 0) : 0,
+      typeOfService: "DIA",
+      isUnbundled: 1,
+      includesPharmacy: 0,
+      typeOfAttendance: "EAE",
+      serviceOutcome: "DISC",
+      dateOfService: dateOnly(order.createdAt),
+      specialtyAttended: "INVE",
       investigations: await Promise.all(items.map(async (item) => {
         const investigation = await db.query.investigations.findFirst({ where: eq(investigations.id, item.investigationId) });
-        return { nhiaCode: investigation?.nhiaCode ?? null, name: investigation?.name, amount: item.lineTotal };
+        return {
+          serviceDate: dateOnly(order.createdAt),
+          gdrgCode: investigation?.gdrgCode || investigation?.nhiaCode || "",
+          nhiaCode: investigation?.nhiaCode ?? null,
+          name: investigation?.name,
+          amount: item.lineTotal,
+        };
       })),
     };
   }));

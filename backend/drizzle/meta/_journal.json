@@ -64,6 +64,13 @@
       "when": 1795455213319,
       "tag": "0008_unique_payment_references",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795455213320,
+      "tag": "0009_nhia_claim_fields",
+      "breakpoints": true
     }
   ]
 }

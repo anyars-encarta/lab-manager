@@ -101,6 +101,7 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [claimsMode, setClaimsMode] = useState<"generate" | "export">("generate");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [facilities, setFacilities] = useState<any[]>([]);
@@ -327,6 +328,7 @@ export function LaboratoryWorkspace({ section }: Props) {
           facilityId: values.facilityId,
           patientId: values.patientId,
           clinicianName: values.clinicianName,
+          claimCheckCode: values.claimCheckCode,
           investigationIds: selected,
         };
         const response = await fetch(`${API_URL}/api/orders`, {
@@ -363,6 +365,33 @@ export function LaboratoryWorkspace({ section }: Props) {
         }
         return;
       } else if (section === "claims") {
+        if (claimsMode === "export") {
+          const params = new URLSearchParams({
+            from: String(values.from),
+            to: String(values.to),
+            facilityId: String(values.facilityId),
+          });
+          const response = await fetch(`${API_URL}/api/nhia/claims/export?${params}`, {
+            credentials: "include",
+          });
+          if (!response.ok) {
+            throw new Error((await response.json()).error || "Unable to export NHIA claims");
+          }
+          const blob = await response.blob();
+          const downloadUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = downloadUrl;
+          anchor.download = `nhia-claims-${values.from}-${values.to}.xml`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(downloadUrl);
+          toast.success("NHIA claims exported", {
+            description: "The XML file was downloaded.",
+          });
+          setDialogOpen(false);
+          return;
+        }
         const response = await fetch(`${API_URL}/api/nhia/claims`, {
           method: "POST",
           credentials: "include",
@@ -401,6 +430,14 @@ export function LaboratoryWorkspace({ section }: Props) {
                 role: values.role,
                 image: userImage || null,
               };
+        }
+        if (section === "patients") {
+          payload = {
+            ...values,
+            dateOfBirth: values.dateOfBirth
+              ? new Date(`${values.dateOfBirth}T00:00:00Z`).toISOString()
+              : undefined,
+          };
         }
         if (section === "investigations")
           payload = {
@@ -802,6 +839,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                   invalidateUserUploadSession();
                   setEditingUser(null);
                   setUserImage("");
+                  if (section === "claims") setClaimsMode("generate");
                 }}>
                   <Plus className="h-4 w-4" />
                   {section === "claims"
@@ -828,7 +866,9 @@ export function LaboratoryWorkspace({ section }: Props) {
                   <DialogHeader>
                     <DialogTitle>
                       {section === "claims"
-                        ? "Generate NHIA claim"
+                        ? claimsMode === "export"
+                          ? "Export NHIA claims"
+                          : "Generate NHIA claim"
                         : section === "reports"
                         ? "Generate laboratory report"
                         : editingUser
@@ -859,6 +899,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                           <Field name="phone" label="Phone" />
                           <Field name="gender" label="Gender" />
                         </div>
+                        <Field name="dateOfBirth" label="Date of birth" type="date" />
                         <Field name="nhisNumber" label="NHIS number" />
                       </>
                     )}
@@ -953,6 +994,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                         <FacilityField facilities={facilities} />
                         <PatientField patients={patients} />
                         <Field name="clinicianName" label="Clinician" />
+                        <Field name="claimCheckCode" label="Claims Check Code (CCC)" />
                         <InvestigationField investigations={investigations} />
                       </>
                     )}
@@ -993,7 +1035,9 @@ export function LaboratoryWorkspace({ section }: Props) {
                         ? "Uploading..."
                         : saving
                           ? "Saving..."
-                          : "Save"}
+                          : section === "claims" && claimsMode === "export"
+                            ? "Export XML"
+                            : "Save"}
                     </Button>
                   </DialogFooter>
                 </form>
@@ -1026,14 +1070,30 @@ export function LaboratoryWorkspace({ section }: Props) {
                 <CardTitle className="text-base">Records</CardTitle>
                 <CardDescription>{filtered.length} record(s)</CardDescription>
               </div>
-              <div className="relative w-full max-w-xs">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  placeholder="Search records..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+              <div className="flex items-center gap-2">
+                {section === "claims" && role === "admin" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="cursor-pointer gap-2"
+                    onClick={() => {
+                      setClaimsMode("export");
+                      setDialogOpen(true);
+                    }}
+                  >
+                    <Download className="h-4 w-4" />
+                    Export XML
+                  </Button>
+                )}
+                <div className="relative w-full max-w-xs">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    className="pl-9"
+                    placeholder="Search records..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
           </CardHeader>
