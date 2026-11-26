@@ -904,9 +904,12 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
-  const filtered = rows.filter((row) =>
-    JSON.stringify(row).toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered =
+    section === "orders"
+      ? rows
+      : rows.filter((row) =>
+          JSON.stringify(row).toLowerCase().includes(search.toLowerCase()),
+        );
   const [title, description] = titles[section];
 
   return (
