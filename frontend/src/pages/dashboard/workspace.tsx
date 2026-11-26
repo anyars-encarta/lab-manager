@@ -38,6 +38,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { openPaystackCheckout } from "@/lib/paystack-inline";
+import { DataTablePagination } from "@/components/refine-ui/data-table/data-table-pagination";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -103,6 +104,12 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [claimsMode, setClaimsMode] = useState<"generate" | "export">("generate");
+  const [claimFrom, setClaimFrom] = useState("");
+  const [claimTo, setClaimTo] = useState("");
+  const [claimPage, setClaimPage] = useState(1);
+  const [claimPageSize, setClaimPageSize] = useState(20);
+  const [claimTotal, setClaimTotal] = useState(0);
+  const [claimGrandTotal, setClaimGrandTotal] = useState("0.00");
   const [claimDetails, setClaimDetails] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -160,13 +167,27 @@ export function LaboratoryWorkspace({ section }: Props) {
         reports: "/api/reports/summary",
         claims: "/api/nhia/claims/individual",
       };
-      const response = await fetch(`${API_URL}${paths[section]}`, {
+      const query = section === "claims"
+        ? `?${new URLSearchParams({
+            page: String(claimPage),
+            pageSize: String(claimPageSize),
+            ...(claimFrom ? { from: claimFrom } : {}),
+            ...(claimTo ? { to: claimTo } : {}),
+          }).toString()}`
+        : "";
+      const response = await fetch(`${API_URL}${paths[section]}${query}`, {
         credentials: "include",
       });
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       if (generation !== requestGeneration.current) return;
-      setRows(Array.isArray(data) ? data : data ? [data] : []);
+      if (section === "claims" && data && !Array.isArray(data)) {
+        setRows(Array.isArray(data.data) ? data.data : []);
+        setClaimTotal(Number(data.total || 0));
+        setClaimGrandTotal(String(data.grandTotal || "0.00"));
+      } else {
+        setRows(Array.isArray(data) ? data : data ? [data] : []);
+      }
       if (section !== "facilities") {
         try {
           const lookupResponse = await fetch(`${API_URL}/api/facilities`, {
@@ -264,6 +285,10 @@ export function LaboratoryWorkspace({ section }: Props) {
     setSearch("");
     void load();
   }, [section]);
+
+  useEffect(() => {
+    if (section === "claims") void load();
+  }, [section, claimPage, claimPageSize, claimFrom, claimTo]);
 
   const uploadUserImage = async (file: File) => {
     if (!["image/png", "image/jpeg"].includes(file.type)) {
@@ -770,6 +795,32 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const exportFilteredClaims = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (claimFrom) params.set("from", claimFrom);
+      if (claimTo) params.set("to", claimTo);
+      const response = await fetch(`${API_URL}/api/nhia/claims/export?${params}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error((await response.json()).error || "Unable to export claims");
+      }
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = `nhia-claims-${claimFrom || "all"}-${claimTo || "dates"}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+      toast.success("NHIA claims exported");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to export claims");
+    }
+  };
+
   const exportIndividualClaim = async (claim: any) => {
     try {
       const response = await fetch(`${API_URL}/api/nhia/claims/individual/${claim.id}/export`, {
@@ -847,7 +898,6 @@ export function LaboratoryWorkspace({ section }: Props) {
             "facilities",
             "users",
             "reports",
-            "claims",
           ].includes(section) && (
             <Dialog open={dialogOpen} onOpenChange={(open) => {
               setDialogOpen(open);
@@ -1102,22 +1152,49 @@ export function LaboratoryWorkspace({ section }: Props) {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base">Records</CardTitle>
-                <CardDescription>{filtered.length} record(s)</CardDescription>
+                <CardDescription>
+                  {section === "claims"
+                    ? `${claimTotal} record(s) · Grand Total: GH₵ ${Number(claimGrandTotal).toFixed(2)}`
+                    : `${filtered.length} record(s)`}
+                </CardDescription>
               </div>
               <div className="flex items-center gap-2">
                 {section === "claims" && role === "admin" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="cursor-pointer gap-2"
-                    onClick={() => {
-                      setClaimsMode("export");
-                      setDialogOpen(true);
-                    }}
-                  >
-                    <Download className="h-4 w-4" />
-                    Export XML
-                  </Button>
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Label className="whitespace-nowrap">From</Label>
+                      <Input
+                        type="date"
+                        className="h-9 w-36"
+                        value={claimFrom}
+                        onChange={(event) => {
+                          setClaimFrom(event.target.value);
+                          setClaimPage(1);
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="whitespace-nowrap">To</Label>
+                      <Input
+                        type="date"
+                        className="h-9 w-36"
+                        value={claimTo}
+                        onChange={(event) => {
+                          setClaimTo(event.target.value);
+                          setClaimPage(1);
+                        }}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="cursor-pointer gap-2"
+                      onClick={() => void exportFilteredClaims()}
+                    >
+                      <Download className="h-4 w-4" />
+                      Export XML
+                    </Button>
+                  </>
                 )}
                 <div className="relative w-full max-w-xs">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1178,6 +1255,21 @@ export function LaboratoryWorkspace({ section }: Props) {
               />
             )}
           </CardContent>
+          {section === "claims" && (
+            <div className="border-t px-4 py-3">
+              <DataTablePagination
+                currentPage={claimPage}
+                pageCount={Math.max(1, Math.ceil(claimTotal / claimPageSize))}
+                setCurrentPage={setClaimPage}
+                pageSize={claimPageSize}
+                setPageSize={(size) => {
+                  setClaimPageSize(size);
+                  setClaimPage(1);
+                }}
+                total={claimTotal}
+              />
+            </div>
+          )}
         </Card>
       )}
       <Dialog open={claimDetails != null} onOpenChange={(open) => !open && setClaimDetails(null)}>
@@ -1212,7 +1304,7 @@ export function LaboratoryWorkspace({ section }: Props) {
             </div>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setClaimDetails(null)}>Close</Button>
+            <Button type="button" variant="outline" className="cursor-pointer" onClick={() => setClaimDetails(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

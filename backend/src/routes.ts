@@ -1380,13 +1380,17 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
 api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, res) => {
  const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
  const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
+ const page = Math.max(1, Number(req.query.page || 1) || 1);
+ const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+ const offset = (page - 1) * pageSize;
  const conditions = [
    eq(patients.isInsured, true),
  ];
  if (from && !Number.isNaN(from.getTime())) conditions.push(gte(labOrders.createdAt, from));
  if (to && !Number.isNaN(to.getTime())) conditions.push(lte(labOrders.createdAt, new Date(`${req.query.to}T23:59:59Z`)));
 
- const attendanceRows = await db.select({
+ const [attendanceRows, countRows] = await Promise.all([
+  db.select({
    id: labOrders.id,
    claimId: labOrders.claimId,
    claimCheckCode: labOrders.claimCheckCode,
@@ -1398,7 +1402,28 @@ api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, 
    .innerJoin(patients, eq(labOrders.patientId, patients.id))
    .where(and(...conditions))
    .orderBy(desc(labOrders.createdAt))
-   .limit(500);
+    .limit(pageSize)
+    .offset(offset),
+  db.select({ count: sql<number>`count(*)::int` }).from(labOrders)
+    .innerJoin(patients, eq(labOrders.patientId, patients.id))
+    .where(and(...conditions)),
+ ]);
+ const allFilteredRows = await db.select({
+   id: labOrders.id,
+   patientId: labOrders.patientId,
+ }).from(labOrders)
+   .innerJoin(patients, eq(labOrders.patientId, patients.id))
+   .where(and(...conditions));
+ let grandTotal = 0;
+ for (const attendance of allFilteredRows) {
+   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, attendance.id));
+   for (const item of items) {
+     const investigation = await db.query.investigations.findFirst({
+       where: eq(investigations.id, item.investigationId),
+     });
+     grandTotal += investigation ? coveredInvestigationCost(investigation) : 0;
+   }
+ }
 
  const claims = await Promise.all(attendanceRows.map(async ({ patientId, ...attendance }) => {
    const patient = await db.query.patients.findFirst({ where: eq(patients.id, patientId) });
@@ -1436,7 +1461,13 @@ api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, 
      investigations: investigationRows,
    };
  }));
- res.json(claims);
+ res.json({
+  data: claims,
+  page,
+  pageSize,
+  total: Number(countRows[0]?.count || 0),
+  grandTotal: grandTotal.toFixed(2),
+ });
 }));
 
 api.get("/nhia/claims/individual/:id/export", requireRole("admin"), asyncRoute(async (req, res) => {
@@ -1483,18 +1514,28 @@ api.get("/nhia/claims/individual/:id/export", requireRole("admin"), asyncRoute(a
 }));
 
 api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res) => {
-  const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
-  const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
-  if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    return res.status(400).json({ error: "A valid from and to date range is required" });
-  }
-  if (from > to) return res.status(400).json({ error: "The from date cannot be after the to date" });
+  const from = typeof req.query.from === "string" && req.query.from
+    ? new Date(`${req.query.from}T00:00:00Z`) : null;
+  const to = typeof req.query.to === "string" && req.query.to
+    ? new Date(`${req.query.to}T23:59:59Z`) : null;
+  if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "The from date is invalid" });
+  if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: "The to date is invalid" });
+  if (from && to && from > to) return res.status(400).json({ error: "The from date cannot be after the to date" });
 
-  const conditions = [
-    gte(labOrders.createdAt, from),
-    lte(labOrders.createdAt, to),
-  ];
-  const attendanceRows = await db.select().from(labOrders).where(and(...conditions)).orderBy(asc(labOrders.createdAt));
+  const conditions: any[] = [];
+  if (from) conditions.push(gte(labOrders.createdAt, from));
+  if (to) conditions.push(lte(labOrders.createdAt, to));
+  conditions.push(eq(patients.isInsured, true));
+  const attendanceRows = await db.select({
+    id: labOrders.id,
+    claimId: labOrders.claimId,
+    claimCheckCode: labOrders.claimCheckCode,
+    patientId: labOrders.patientId,
+    createdAt: labOrders.createdAt,
+  }).from(labOrders)
+    .innerJoin(patients, eq(labOrders.patientId, patients.id))
+    .where(and(...conditions))
+    .orderBy(asc(labOrders.createdAt));
   const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
 
   const visitCounts = new Map<string, number>();
