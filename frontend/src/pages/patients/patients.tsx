@@ -84,6 +84,10 @@ type Patient = {
   lastName: string;
   phone?: string;
   nhisNumber?: string;
+  nhisStatus?: string;
+  isInsured?: boolean;
+  dateOfBirth?: string;
+  gender?: string;
   createdAt: string;
 };
 
@@ -107,6 +111,8 @@ export function PatientsPage() {
   const [selectedTests, setSelectedTests] = useState<string[]>([]);
   const [investigationSearch, setInvestigationSearch] = useState("");
   const [patientMode, setPatientMode] = useState<"new" | "existing">("new");
+  const [isInsured, setIsInsured] = useState(false);
+  const [requestIsInsured, setRequestIsInsured] = useState(false);
   const [selectedExistingPatientId, setSelectedExistingPatientId] =
     useState("");
   const [requestDialogOpen, setRequestDialogOpen] = useState(false);
@@ -296,6 +302,7 @@ export function PatientsPage() {
     ++requestDialogGeneration.current;
     setRequestPatient(patient);
     setRequestFacilityId("");
+    setRequestIsInsured(Boolean(patient.isInsured));
     setSelectedTests([]);
     setInvestigationSearch("");
     setError("");
@@ -320,6 +327,14 @@ export function PatientsPage() {
     setError("");
     const form = new FormData(event.currentTarget);
     const clinicianName = String(form.get("clinicianName") || "").trim();
+    const nhisNumber = String(form.get("nhisNumber") || "").trim();
+    const nhisStatus = String(form.get("nhisStatus") || "").trim();
+    const claimCheckCode = String(form.get("claimCheckCode") || "").trim();
+    if (requestIsInsured && (!nhisNumber || !nhisStatus || !claimCheckCode)) {
+      setSaving(false);
+      setError("NHIS number, NHIS status, and Claims Check Code (CCC) are required for insured patients.");
+      return;
+    }
     try {
       const response = await fetch(`${API_URL}/api/orders`, {
         method: "POST",
@@ -329,6 +344,10 @@ export function PatientsPage() {
           facilityId: requestFacilityId,
           patientId: requestPatient.id,
           ...(clinicianName ? { clinicianName } : {}),
+          isInsured: requestIsInsured,
+          nhisNumber: nhisNumber || undefined,
+          nhisStatus: nhisStatus || undefined,
+          claimCheckCode: claimCheckCode || undefined,
           investigationIds: selectedTests,
         }),
       });
@@ -344,6 +363,18 @@ export function PatientsPage() {
         setRequestDialogOpen(false);
         setSelectedTests([]);
       }
+      setPatients((current) =>
+        current.map((patient) =>
+          patient.id === requestPatient.id
+            ? {
+                ...patient,
+                isInsured: requestIsInsured,
+                nhisNumber: nhisNumber || undefined,
+                nhisStatus: nhisStatus || undefined,
+              }
+            : patient,
+        ),
+      );
       setSuccess({
         patientNumber: requestPatient.patientNumber,
         orderNumber: body.orderNumber || "",
@@ -368,6 +399,7 @@ export function PatientsPage() {
     setDialogOpen(false);
     setSelectedTests([]);
     setInvestigationSearch("");
+    setIsInsured(false);
     setError("");
   };
 
@@ -395,6 +427,14 @@ export function PatientsPage() {
       try {
         const form = new FormData(event.currentTarget);
         const clinicianName = String(form.get("clinicianName") || "").trim();
+        const nhisNumber = String(form.get("nhisNumber") || "").trim();
+        const nhisStatus = String(form.get("nhisStatus") || "").trim();
+        const claimCheckCode = String(form.get("claimCheckCode") || "").trim();
+        if (isInsured && (!nhisNumber || !nhisStatus || !claimCheckCode)) {
+          setSaving(false);
+          setError("NHIS number, NHIS status, and Claims Check Code (CCC) are required for insured patients.");
+          return;
+        }
         const response = await fetch(`${API_URL}/api/orders`, {
           method: "POST",
           credentials: "include",
@@ -403,6 +443,10 @@ export function PatientsPage() {
             facilityId,
             patientId: existingPatient.id,
             ...(clinicianName ? { clinicianName } : {}),
+            isInsured,
+            nhisNumber: nhisNumber || undefined,
+            nhisStatus: nhisStatus || undefined,
+            claimCheckCode: claimCheckCode || undefined,
             investigationIds: selectedTests,
           }),
         });
@@ -414,6 +458,18 @@ export function PatientsPage() {
             existingPatient.firstName
           } ${existingPatient.lastName}.`,
         });
+        setPatients((current) =>
+          current.map((patient) =>
+            patient.id === existingPatient.id
+              ? {
+                  ...patient,
+                  isInsured,
+                  nhisNumber: nhisNumber || undefined,
+                  nhisStatus: nhisStatus || undefined,
+                }
+              : patient,
+          ),
+        );
         setSuccess({
           patientNumber: existingPatient.patientNumber,
           orderNumber: body.orderNumber || "",
@@ -441,6 +497,10 @@ export function PatientsPage() {
     }
     const form = new FormData(event.currentTarget);
     const values = Object.fromEntries(form.entries());
+    if (isInsured && (!String(values.nhisNumber || "").trim() || !String(values.nhisStatus || "").trim() || !String(values.claimCheckCode || "").trim())) {
+      setError("NHIS number, NHIS status, and Claims Check Code (CCC) are required for insured patients.");
+      return;
+    }
     setSaving(true);
     try {
       const response = await fetch(`${API_URL}/api/patients/register-request`, {
@@ -458,6 +518,8 @@ export function PatientsPage() {
           address: values.address || undefined,
           nhisNumber: values.nhisNumber || undefined,
           nhisStatus: values.nhisStatus || undefined,
+          isInsured,
+          claimCheckCode: values.claimCheckCode || undefined,
           clinicianName: values.clinicianName || undefined,
           notes: values.notes || undefined,
           investigationIds: selectedTests,
@@ -564,6 +626,7 @@ export function PatientsPage() {
                   onClick={() => {
                     setPatientMode("existing");
                     setSelectedExistingPatientId("");
+                    setIsInsured(false);
                     setError("");
                   }}
                 >
@@ -577,6 +640,7 @@ export function PatientsPage() {
                   onClick={() => {
                     setPatientMode("new");
                     setSelectedExistingPatientId("");
+                    setIsInsured(false);
                     setError("");
                   }}
                 >
@@ -601,7 +665,11 @@ export function PatientsPage() {
                       <ExistingPatientSearch
                         patients={patients}
                         value={selectedExistingPatientId}
-                        onChange={setSelectedExistingPatientId}
+                        onChange={(patientId) => {
+                          setSelectedExistingPatientId(patientId);
+                          const selected = patients.find((patient) => patient.id === patientId);
+                          setIsInsured(Boolean(selected?.isInsured));
+                        }}
                       />
                       {selectedExistingPatientId &&
                         (() => {
@@ -656,27 +724,62 @@ export function PatientsPage() {
                         <Field name="email" label="Email" type="email" />
                       </div>
                       <Field name="address" label="Address" />
-                      <div className="grid grid-cols-2 gap-3">
-                        <Field name="nhisNumber" label="NHIS number" />
+                      <Field name="notes" label="Clinical notes" />
+                    </>
+                  )}
+                  <div
+                    key={`main-insurance-${selectedExistingPatientId || "new"}-${isInsured}`}
+                    className="space-y-3 rounded-lg border p-4"
+                  >
+                    <div className="space-y-2">
+                      <Label>Patient insurance</Label>
+                      <input type="hidden" name="isInsured" value={String(isInsured)} />
+                      <Select
+                        value={isInsured ? "insured" : "non_insured"}
+                        onValueChange={(value) => setIsInsured(value === "insured")}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="non_insured">Non-insured patient</SelectItem>
+                          <SelectItem value="insured">Insured patient</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {isInsured && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <Field
+                          name="nhisNumber"
+                          label="NHIS number"
+                          required
+                          defaultValue={
+                            patients.find((patient) => patient.id === selectedExistingPatientId)?.nhisNumber || ""
+                          }
+                        />
                         <div className="space-y-2">
                           <Label>NHIS status</Label>
-                          <Select name="nhisStatus">
+                          <Select
+                            name="nhisStatus"
+                            required
+                            defaultValue={
+                              patients.find((patient) => patient.id === selectedExistingPatientId)?.nhisStatus
+                            }
+                          >
                             <SelectTrigger>
                               <SelectValue placeholder="Select status" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="active">Active</SelectItem>
                               <SelectItem value="inactive">Inactive</SelectItem>
-                              <SelectItem value="not_eligible">
-                                Not eligible
-                              </SelectItem>
+                              <SelectItem value="not_eligible">Not eligible</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
+                        <Field name="claimCheckCode" label="Claims Check Code (CCC)" required />
                       </div>
-                      <Field name="notes" label="Clinical notes" />
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 <Card className="border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20">
@@ -800,6 +903,7 @@ export function PatientsPage() {
           if (!open) {
             setSelectedTests([]);
             setInvestigationSearch("");
+            setRequestIsInsured(false);
             setError("");
           }
         }}
@@ -832,6 +936,50 @@ export function PatientsPage() {
                   />
                 </div>
                 <Field name="clinicianName" label="Referring clinician" />
+              </div>
+              <div
+                key={`request-insurance-${requestPatient?.id || "none"}-${requestIsInsured}`}
+                className="space-y-3 rounded-lg border p-4"
+              >
+                <div className="space-y-2">
+                  <Label>Patient insurance</Label>
+                  <Select
+                    value={requestIsInsured ? "insured" : "non_insured"}
+                    onValueChange={(value) => setRequestIsInsured(value === "insured")}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="non_insured">Non-insured patient</SelectItem>
+                      <SelectItem value="insured">Insured patient</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {requestIsInsured && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Field
+                      name="nhisNumber"
+                      label="NHIS number"
+                      required
+                      defaultValue={requestPatient?.nhisNumber || ""}
+                    />
+                    <div className="space-y-2">
+                      <Label>NHIS status</Label>
+                      <Select name="nhisStatus" required defaultValue={requestPatient?.nhisStatus}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                          <SelectItem value="not_eligible">Not eligible</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Field name="claimCheckCode" label="Claims Check Code (CCC)" required />
+                  </div>
+                )}
               </div>
               <Card className="border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20">
                 <CardHeader className="pb-3">
@@ -1027,16 +1175,18 @@ function Field({
   label,
   type = "text",
   required = false,
+  defaultValue,
 }: {
   name: string;
   label: string;
   type?: string;
   required?: boolean;
+  defaultValue?: string;
 }) {
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{label}</Label>
-      <Input id={name} name={name} type={type} required={required} />
+      <Input id={name} name={name} type={type} required={required} defaultValue={defaultValue} />
     </div>
   );
 }

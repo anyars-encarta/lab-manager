@@ -124,6 +124,7 @@ export const laboratoryProfiles = pgTable("laboratory_profiles", {
   email: varchar("email", { length: 200 }),
   slogan: text("slogan"),
   currency: varchar("currency", { length: 10 }).notNull().default("GHS"),
+  preAuthorizationCodes: text("pre_authorization_codes"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
@@ -139,6 +140,7 @@ export const patients = pgTable("patients", {
   address: text("address"),
   nhisNumber: varchar("nhis_number", { length: 50 }),
   nhisStatus: varchar("nhis_status", { length: 30 }),
+  isInsured: boolean("is_insured").notNull().default(false),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -203,6 +205,9 @@ export const parameterReferenceRanges = pgTable("parameter_reference_ranges", {
 export const labOrders = pgTable("lab_orders", {
   id: uuid("id").primaryKey().defaultRandom(),
   orderNumber: varchar("order_number", { length: 50 }).notNull().unique(),
+  claimId: varchar("claim_id", { length: 50 }).notNull().unique(),
+  claimCheckCode: varchar("claim_check_code", { length: 100 }),
+  isInsured: boolean("is_insured").notNull().default(false),
   patientId: uuid("patient_id").notNull().references(() => patients.id),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdBy: text("created_by").notNull().references(() => users.id),
@@ -217,6 +222,7 @@ export const labOrders = pgTable("lab_orders", {
 }, (table) => [
   index("lab_orders_patient_idx").on(table.patientId),
   index("lab_orders_facility_idx").on(table.facilityId),
+  uniqueIndex("lab_orders_claim_id_uidx").on(table.claimId),
 ]);
 
 export const orderItems = pgTable("order_items", {

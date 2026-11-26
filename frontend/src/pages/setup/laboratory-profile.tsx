@@ -18,6 +18,7 @@ const emptyProfile = {
   email: "",
   slogan: "",
   currency: "GHS",
+  preAuthorizationCodes: "",
 };
 
 export function LaboratoryProfilePage() {
@@ -40,6 +41,7 @@ export function LaboratoryProfilePage() {
             email: profile.email || "",
             slogan: profile.slogan || "",
             currency: profile.currency || "GHS",
+            preAuthorizationCodes: profile.preAuthorizationCodes || "",
           });
         }
       })
@@ -205,6 +207,15 @@ export function LaboratoryProfilePage() {
                   <Label htmlFor="currency">Currency</Label>
                   <Input id="currency" value={form.currency} onChange={(event) => setForm({ ...form, currency: event.target.value })} />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="preAuthorizationCodes">NHIA pre-authorisation codes</Label>
+                <Input
+                  id="preAuthorizationCodes"
+                  value={form.preAuthorizationCodes}
+                  onChange={(event) => setForm({ ...form, preAuthorizationCodes: event.target.value })}
+                  placeholder="03-NR-00324,201300197"
+                />
               </div>
               <div>
                 <Button type="submit" className="gap-2 cursor-pointer" disabled={saving || uploading}>

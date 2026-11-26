@@ -3,11 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import {
   Building2,
+  Check,
+  ChevronsUpDown,
   ClipboardList,
   Download,
   Edit,
   FlaskConical,
   FileText,
+  Eye,
   Microscope,
   Plus,
   Search,
@@ -37,6 +40,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { openPaystackCheckout } from "@/lib/paystack-inline";
+import { DataTablePagination } from "@/components/refine-ui/data-table/data-table-pagination";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -55,6 +59,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -84,7 +97,7 @@ const titles = {
   facilities: ["Facilities", "Manage laboratory facility details", Building2],
   users: ["User management", "Create accounts and assign roles", UserCog],
   reports: ["Reports", "Generate laboratory activity reports", FlaskConical],
-  claims: ["NHIA claims", "Generate Ghana NHIA claim batches", ShieldCheck],
+  claims: ["NHIA claims", "Generate NHIA claim batches", ShieldCheck],
 } as const;
 
 export function LaboratoryWorkspace({ section }: Props) {
@@ -101,6 +114,17 @@ export function LaboratoryWorkspace({ section }: Props) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [claimsMode, setClaimsMode] = useState<"generate" | "export">("generate");
+  const [claimFrom, setClaimFrom] = useState("");
+  const [claimTo, setClaimTo] = useState("");
+  const [claimPage, setClaimPage] = useState(1);
+  const [claimPageSize, setClaimPageSize] = useState(20);
+  const [claimTotal, setClaimTotal] = useState(0);
+  const [claimGrandTotal, setClaimGrandTotal] = useState("0.00");
+  const [claimDetails, setClaimDetails] = useState<any>(null);
+  const [orderPage, setOrderPage] = useState(1);
+  const [orderPageSize, setOrderPageSize] = useState(20);
+  const [orderTotal, setOrderTotal] = useState(0);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [facilities, setFacilities] = useState<any[]>([]);
@@ -155,15 +179,38 @@ export function LaboratoryWorkspace({ section }: Props) {
         facilities: "/api/facilities",
         users: "/api/users",
         reports: "/api/reports/summary",
-        claims: "/api/nhia/claims",
+        claims: "/api/nhia/claims/individual",
       };
-      const response = await fetch(`${API_URL}${paths[section]}`, {
+      const query = section === "claims"
+        ? `?${new URLSearchParams({
+            page: String(claimPage),
+            pageSize: String(claimPageSize),
+            ...(claimFrom ? { from: claimFrom } : {}),
+            ...(claimTo ? { to: claimTo } : {}),
+          }).toString()}`
+        : section === "orders"
+        ? `?${new URLSearchParams({
+            page: String(orderPage),
+            pageSize: String(orderPageSize),
+            ...(search.trim() ? { search: search.trim() } : {}),
+          }).toString()}`
+        : "";
+      const response = await fetch(`${API_URL}${paths[section]}${query}`, {
         credentials: "include",
       });
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       if (generation !== requestGeneration.current) return;
-      setRows(Array.isArray(data) ? data : data ? [data] : []);
+      if (section === "claims" && data && !Array.isArray(data)) {
+        setRows(Array.isArray(data.data) ? data.data : []);
+        setClaimTotal(Number(data.total || 0));
+        setClaimGrandTotal(String(data.grandTotal || "0.00"));
+      } else if (section === "orders" && data && !Array.isArray(data)) {
+        setRows(Array.isArray(data.data) ? data.data : []);
+        setOrderTotal(Number(data.total || 0));
+      } else {
+        setRows(Array.isArray(data) ? data : data ? [data] : []);
+      }
       if (section !== "facilities") {
         try {
           const lookupResponse = await fetch(`${API_URL}/api/facilities`, {
@@ -262,6 +309,20 @@ export function LaboratoryWorkspace({ section }: Props) {
     void load();
   }, [section]);
 
+  useEffect(() => {
+    if (section === "claims") void load();
+  }, [section, claimPage, claimPageSize, claimFrom, claimTo]);
+
+  useEffect(() => {
+    if (section === "orders") void load();
+  }, [section, orderPage, orderPageSize]);
+  useEffect(() => {
+    if (section === "orders") {
+      setOrderPage(1);
+      void load();
+    }
+  }, [search]);
+
   const uploadUserImage = async (file: File) => {
     if (!["image/png", "image/jpeg"].includes(file.type)) {
       toast.error("Please select a PNG or JPEG image");
@@ -327,6 +388,7 @@ export function LaboratoryWorkspace({ section }: Props) {
           facilityId: values.facilityId,
           patientId: values.patientId,
           clinicianName: values.clinicianName,
+          claimCheckCode: values.claimCheckCode,
           investigationIds: selected,
         };
         const response = await fetch(`${API_URL}/api/orders`, {
@@ -363,12 +425,37 @@ export function LaboratoryWorkspace({ section }: Props) {
         }
         return;
       } else if (section === "claims") {
+        if (claimsMode === "export") {
+          const params = new URLSearchParams({
+            from: String(values.from),
+            to: String(values.to),
+          });
+          const response = await fetch(`${API_URL}/api/nhia/claims/export?${params}`, {
+            credentials: "include",
+          });
+          if (!response.ok) {
+            throw new Error((await response.json()).error || "Unable to export NHIA claims");
+          }
+          const blob = await response.blob();
+          const downloadUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = downloadUrl;
+          anchor.download = `nhia-claims-${values.from}-${values.to}.xml`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(downloadUrl);
+          toast.success("NHIA claims exported", {
+            description: "The XML file was downloaded.",
+          });
+          setDialogOpen(false);
+          return;
+        }
         const response = await fetch(`${API_URL}/api/nhia/claims`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            facilityId: values.facilityId,
             claimPeriodStart: new Date(
               `${values.from}T00:00:00Z`,
             ).toISOString(),
@@ -401,6 +488,14 @@ export function LaboratoryWorkspace({ section }: Props) {
                 role: values.role,
                 image: userImage || null,
               };
+        }
+        if (section === "patients") {
+          payload = {
+            ...values,
+            dateOfBirth: values.dateOfBirth
+              ? new Date(`${values.dateOfBirth}T00:00:00Z`).toISOString()
+              : undefined,
+          };
         }
         if (section === "investigations")
           payload = {
@@ -733,6 +828,55 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
+  const exportFilteredClaims = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (claimFrom) params.set("from", claimFrom);
+      if (claimTo) params.set("to", claimTo);
+      const response = await fetch(`${API_URL}/api/nhia/claims/export?${params}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error((await response.json()).error || "Unable to export claims");
+      }
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = `nhia-claims-${claimFrom || "all"}-${claimTo || "dates"}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+      toast.success("NHIA claims exported");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to export claims");
+    }
+  };
+
+  const exportIndividualClaim = async (claim: any) => {
+    try {
+      const response = await fetch(`${API_URL}/api/nhia/claims/individual/${claim.id}/export`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error((await response.json()).error || "Unable to export claim");
+      }
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = `${claim.claimId}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+      toast.success("NHIA claim exported");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to export claim");
+    }
+  };
+
   const openLaboratoryReport = async (order: any, download = false) => {
     try {
       const response = await fetch(`${API_URL}/api/orders/${order.id}/report`, {
@@ -760,9 +904,12 @@ export function LaboratoryWorkspace({ section }: Props) {
     }
   };
 
-  const filtered = rows.filter((row) =>
-    JSON.stringify(row).toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered =
+    section === "orders"
+      ? rows
+      : rows.filter((row) =>
+          JSON.stringify(row).toLowerCase().includes(search.toLowerCase()),
+        );
   const [title, description] = titles[section];
 
   return (
@@ -802,6 +949,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                   invalidateUserUploadSession();
                   setEditingUser(null);
                   setUserImage("");
+                  if (section === "claims") setClaimsMode("generate");
                 }}>
                   <Plus className="h-4 w-4" />
                   {section === "claims"
@@ -828,7 +976,9 @@ export function LaboratoryWorkspace({ section }: Props) {
                   <DialogHeader>
                     <DialogTitle>
                       {section === "claims"
-                        ? "Generate NHIA claim"
+                        ? claimsMode === "export"
+                          ? "Export NHIA claims"
+                          : "Generate NHIA claim"
                         : section === "reports"
                         ? "Generate laboratory report"
                         : editingUser
@@ -859,6 +1009,7 @@ export function LaboratoryWorkspace({ section }: Props) {
                           <Field name="phone" label="Phone" />
                           <Field name="gender" label="Gender" />
                         </div>
+                        <Field name="dateOfBirth" label="Date of birth" type="date" />
                         <Field name="nhisNumber" label="NHIS number" />
                       </>
                     )}
@@ -953,10 +1104,11 @@ export function LaboratoryWorkspace({ section }: Props) {
                         <FacilityField facilities={facilities} />
                         <PatientField patients={patients} />
                         <Field name="clinicianName" label="Clinician" />
+                        <Field name="claimCheckCode" label="Claims Check Code (CCC)" />
                         <InvestigationField investigations={investigations} />
                       </>
                     )}
-                    {(section === "claims" || section === "reports") && (
+                    {section === "reports" && (
                       <>
                         <FacilityField facilities={facilities} />
                         <div className="grid grid-cols-2 gap-3">
@@ -969,6 +1121,17 @@ export function LaboratoryWorkspace({ section }: Props) {
                           <Field name="to" label="To" type="date" required />
                         </div>
                       </>
+                    )}
+                    {section === "claims" && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field
+                          name="from"
+                          label="From"
+                          type="date"
+                          required
+                        />
+                        <Field name="to" label="To" type="date" required />
+                      </div>
                     )}
                   </div>
                   {submissionError && (
@@ -993,7 +1156,9 @@ export function LaboratoryWorkspace({ section }: Props) {
                         ? "Uploading..."
                         : saving
                           ? "Saving..."
-                          : "Save"}
+                          : section === "claims" && claimsMode === "export"
+                            ? "Export XML"
+                            : "Save"}
                     </Button>
                   </DialogFooter>
                 </form>
@@ -1024,16 +1189,61 @@ export function LaboratoryWorkspace({ section }: Props) {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base">Records</CardTitle>
-                <CardDescription>{filtered.length} record(s)</CardDescription>
+                <CardDescription>
+                  {section === "claims"
+                    ? `${claimTotal} record(s) · Grand Total: GH₵ ${Number(claimGrandTotal).toFixed(2)}`
+                    : section === "orders"
+                    ? `${orderTotal} record(s)`
+                    : `${filtered.length} record(s)`}
+                </CardDescription>
               </div>
-              <div className="relative w-full max-w-xs">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  placeholder="Search records..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+              <div className="flex items-center gap-2">
+                {section === "claims" && role === "admin" && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Label className="whitespace-nowrap">From</Label>
+                      <Input
+                        type="date"
+                        className="h-9 w-36"
+                        value={claimFrom}
+                        onChange={(event) => {
+                          setClaimFrom(event.target.value);
+                          setClaimPage(1);
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="whitespace-nowrap">To</Label>
+                      <Input
+                        type="date"
+                        className="h-9 w-36"
+                        value={claimTo}
+                        onChange={(event) => {
+                          setClaimTo(event.target.value);
+                          setClaimPage(1);
+                        }}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="cursor-pointer gap-2"
+                      onClick={() => void exportFilteredClaims()}
+                    >
+                      <Download className="h-4 w-4" />
+                      Export XML
+                    </Button>
+                  </>
+                )}
+                <div className="relative w-full max-w-xs">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    className="pl-9"
+                    placeholder="Search records..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
           </CardHeader>
@@ -1057,6 +1267,8 @@ export function LaboratoryWorkspace({ section }: Props) {
                 onCaptureResults={(order) => void openResults(order)}
                 onOpenReport={(order) => void openLaboratoryReport(order)}
                 onDownloadReport={(order) => void openLaboratoryReport(order, true)}
+                onViewClaim={(claim) => setClaimDetails(claim)}
+                onExportClaim={(claim) => void exportIndividualClaim(claim)}
                 onEditUser={(user) => {
                   invalidateUserUploadSession();
                   setEditingUser(user);
@@ -1082,8 +1294,74 @@ export function LaboratoryWorkspace({ section }: Props) {
               />
             )}
           </CardContent>
+          {section === "claims" && (
+            <div className="border-t px-4 py-3">
+              <DataTablePagination
+                currentPage={claimPage}
+                pageCount={Math.max(1, Math.ceil(claimTotal / claimPageSize))}
+                setCurrentPage={setClaimPage}
+                pageSize={claimPageSize}
+                setPageSize={(size) => {
+                  setClaimPageSize(size);
+                  setClaimPage(1);
+                }}
+                total={claimTotal}
+              />
+            </div>
+          )}
+          {section === "orders" && (
+            <div className="border-t px-4 py-3">
+              <DataTablePagination
+                currentPage={orderPage}
+                pageCount={Math.max(1, Math.ceil(orderTotal / orderPageSize))}
+                setCurrentPage={setOrderPage}
+                pageSize={orderPageSize}
+                setPageSize={(size) => {
+                  setOrderPageSize(size);
+                  setOrderPage(1);
+                }}
+                total={orderTotal}
+              />
+            </div>
+          )}
         </Card>
       )}
+      <Dialog open={claimDetails != null} onOpenChange={(open) => !open && setClaimDetails(null)}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>NHIA claim details</DialogTitle>
+            <DialogDescription>
+              {claimDetails?.claimId || "Individual claim"}
+            </DialogDescription>
+          </DialogHeader>
+          {claimDetails && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><span className="text-muted-foreground">Patient</span><p className="font-medium">{claimDetails.patientName}</p></div>
+                <div><span className="text-muted-foreground">NHIA number</span><p className="font-medium">{claimDetails.nhisNumber || "—"}</p></div>
+                <div><span className="text-muted-foreground">Patient number</span><p className="font-medium">{claimDetails.patientNumber || "—"}</p></div>
+                <div><span className="text-muted-foreground">CCC</span><p className="font-medium">{claimDetails.claimCheckCode || "—"}</p></div>
+                <div><span className="text-muted-foreground">Service date</span><p className="font-medium">{claimDetails.createdAt ? new Date(claimDetails.createdAt).toLocaleDateString() : "—"}</p></div>
+                <div><span className="text-muted-foreground">Total cost</span><p className="font-medium">GH₵ {Number(claimDetails.totalAmount || 0).toFixed(2)}</p></div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-medium">Investigations</p>
+                <div className="space-y-2">
+                  {claimDetails.investigations?.map((item: any) => (
+                    <div key={item.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <div><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">G-DRG: {item.gdrgCode || "—"}</p></div>
+                      <span>GH₵ {Number(item.amount || 0).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" className="cursor-pointer" onClick={() => setClaimDetails(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={resultOrder != null}
         onOpenChange={(open) => {
@@ -1382,21 +1660,44 @@ function Field({
 }
 
 function FacilityField({ facilities }: { facilities: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = facilities.find((facility) => facility.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="facilityId">Facility</Label>
-      <Select name="facilityId" required>
-        <SelectTrigger id="facilityId">
-          <SelectValue placeholder="Select facility" />
-        </SelectTrigger>
-        <SelectContent>
-          {facilities.map((facility) => (
-            <SelectItem key={facility.id} value={facility.id}>
-              {facility.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="facilityId" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected ? `${selected.name}${selected.code ? ` — ${selected.code}` : ""}` : "Select facility"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search facilities..." />
+            <CommandList>
+              <CommandEmpty>No facility found.</CommandEmpty>
+              <CommandGroup>
+                {facilities.map((facility) => (
+                  <CommandItem
+                    key={facility.id}
+                    value={`${facility.name} ${facility.code || ""}`}
+                    onSelect={() => {
+                      setValue(facility.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check className={`mr-2 h-4 w-4 ${value === facility.id ? "opacity-100" : "opacity-0"}`} />
+                    {facility.name}{facility.code ? ` — ${facility.code}` : ""}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -1424,46 +1725,96 @@ function RoleField({ defaultValue }: { defaultValue?: string }) {
 }
 
 function PatientField({ patients }: { patients: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = patients.find((patient) => patient.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="patientId">Patient</Label>
-      <Select name="patientId" required>
-        <SelectTrigger id="patientId">
-          <SelectValue placeholder="Select patient" />
-        </SelectTrigger>
-        <SelectContent>
-          {patients.map((patient) => (
-            <SelectItem key={patient.id} value={patient.id}>
-              {patient.firstName} {patient.lastName} — {patient.patientNumber}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="patientId" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected ? `${selected.firstName} ${selected.lastName} — ${selected.patientNumber}` : "Select patient"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search name or patient number..." />
+            <CommandList>
+              <CommandEmpty>No patient found.</CommandEmpty>
+              <CommandGroup>
+                {patients.map((patient) => (
+                  <CommandItem
+                    key={patient.id}
+                    value={`${patient.firstName} ${patient.lastName} ${patient.patientNumber} ${patient.nhisNumber || ""}`}
+                    onSelect={() => {
+                      setValue(patient.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check className={`mr-2 h-4 w-4 ${value === patient.id ? "opacity-100" : "opacity-0"}`} />
+                    {patient.firstName} {patient.lastName} — {patient.patientNumber}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
 
 function InvestigationField({ investigations }: { investigations: any[] }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const selected = investigations.find((item) => item.id === value);
   return (
     <div className="space-y-2">
       <Label htmlFor="investigationIds">Investigations</Label>
-      <Select name="investigationIds" required>
-        <SelectTrigger id="investigationIds">
-          <SelectValue placeholder="Select investigation" />
-        </SelectTrigger>
-        <SelectContent>
-          {investigations.map((item) => {
-            const charge = item.covered
-              ? Number(item.topUp || 0)
-              : Number(item.uncoveredTariff || 0);
-            return (
-              <SelectItem key={item.id} value={item.id}>
-                {item.name} — GH₵ {charge.toFixed(2)}
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+      <input type="hidden" name="investigationIds" value={value} required />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" role="combobox" className="w-full justify-between">
+            {selected
+              ? `${selected.name} — GH₵ ${(selected.covered
+                  ? Number(selected.topUp || 0)
+                  : Number(selected.uncoveredTariff || 0)).toFixed(2)}`
+              : "Select investigation"}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search investigations..." />
+            <CommandList>
+              <CommandEmpty>No investigation found.</CommandEmpty>
+              <CommandGroup>
+                {investigations.map((item) => {
+                  const charge = item.covered
+                    ? Number(item.topUp || 0)
+                    : Number(item.uncoveredTariff || 0);
+                  return (
+                    <CommandItem
+                      key={item.id}
+                      value={`${item.name} ${item.gdrgCode || ""} ${item.code || ""}`}
+                      onSelect={() => {
+                        setValue(item.id);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check className={`mr-2 h-4 w-4 ${value === item.id ? "opacity-100" : "opacity-0"}`} />
+                      {item.name} — GH₵ {charge.toFixed(2)}
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -1480,6 +1831,8 @@ function RecordTable({
   onDownloadReport,
   onEditUser,
   onToggleUser,
+  onViewClaim,
+  onExportClaim,
 }: {
   section: Props["section"];
   rows: any[];
@@ -1492,6 +1845,8 @@ function RecordTable({
   onDownloadReport?: (order: any) => void;
   onEditUser?: (user: any) => void;
   onToggleUser?: (user: any) => void;
+  onViewClaim?: (claim: any) => void;
+  onExportClaim?: (claim: any) => void;
 }) {
   const patientName = (row: any) =>
     `${row.firstName || ""} ${row.lastName || ""}`.trim();
@@ -1518,11 +1873,11 @@ function RecordTable({
     facilities: ["name", "code", "phone", "nhiaFacilityCode"],
     users: ["name", "email", "role", "active"],
     claims: [
-      "claimNumber",
-      "status",
+      "claimId",
+      "patientName",
+      "nhisNumber",
       "totalAmount",
-      "claimPeriodStart",
-      "claimPeriodEnd",
+      "createdAt",
     ],
     reports: ["name"],
   };
@@ -1530,6 +1885,7 @@ function RecordTable({
     ...columns[section],
     ...(section === "orders" ? ["actions"] : []),
     ...(section === "users" ? ["actions"] : []),
+    ...(section === "claims" ? ["actions"] : []),
   ];
   return (
     <Table>
@@ -1539,6 +1895,12 @@ function RecordTable({
             <TableHead key={column}>
               {column === "nhisNumber"
                 ? "NHIS"
+                : column === "claimId"
+                ? "Claim ID"
+                : column === "patientName"
+                ? "Patient Name"
+                : column === "totalAmount"
+                ? "Total Cost"
                 : column === "paymentStatus"
                 ? "Payment"
                 : column === "actions"
@@ -1556,7 +1918,28 @@ function RecordTable({
             {tableColumns.map((column) => (
               <TableCell key={column}>
                 {column === "actions" ? (
-                  section === "users" ? (
+                  section === "claims" ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="cursor-pointer"
+                        onClick={() => onViewClaim?.(row)}
+                      >
+                        <Eye className="mr-1 h-3.5 w-3.5" />
+                        View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="cursor-pointer"
+                        onClick={() => onExportClaim?.(row)}
+                      >
+                        <Download className="mr-1 h-3.5 w-3.5" />
+                        Export XML
+                      </Button>
+                    </div>
+                  ) : section === "users" ? (
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
