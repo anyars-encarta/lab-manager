@@ -38,6 +38,11 @@ const xmlEscape = (value: unknown) => String(value ?? "")
   .replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+const exclusiveEndDate = (dateValue: string) => {
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date;
+};
 const isUnderThreeMonths = (birthDate: Date | null, at: Date = new Date()) => {
   if (!birthDate) return false;
   const cutoff = new Date(at);
@@ -750,7 +755,7 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
     nhisNumber: z.string().optional(),
     nhisStatus: z.string().optional(),
     isInsured: z.boolean(),
-    claimCheckCode: z.string().optional(),
+    claimCheckCode: z.string().trim().max(100).optional(),
     clinicianName: z.string().optional(),
     notes: z.string().optional(),
     investigationIds: z.array(z.uuid()).min(1),
@@ -791,6 +796,7 @@ api.post("/patients/register-request", requireRole("admin", "frontdesk"), asyncR
       orderNumber: prefixNumber("LAB"),
       claimId: prefixNumber("CLA"),
       claimCheckCode: body.claimCheckCode?.trim() || null,
+      isInsured: body.isInsured,
       patientId: patient.id,
       facilityId: body.facilityId,
       createdBy: req.appUser!.id,
@@ -825,7 +831,7 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
     isInsured: z.boolean().optional(),
     nhisNumber: z.string().optional(),
     nhisStatus: z.string().optional(),
-    claimCheckCode: z.string().optional(),
+    claimCheckCode: z.string().trim().max(100).optional(),
     investigationIds: z.array(z.uuid()).min(1),
   }).parse(req.body);
   if (body.isInsured) {
@@ -842,34 +848,37 @@ api.post("/orders", requireRole("admin", "frontdesk"), asyncRoute(async (req, re
 
   const patient = await db.query.patients.findFirst({ where: eq(patients.id, body.patientId) });
   if (!patient) return res.status(404).json({ error: "Patient not found" });
-  if (body.isInsured !== undefined) {
-    await db.update(patients).set({
-      isInsured: body.isInsured,
-      nhisNumber: body.nhisNumber?.trim() || null,
-      nhisStatus: body.nhisStatus?.trim() || null,
-    }).where(eq(patients.id, patient.id));
-  }
-
   const total = selected.reduce((sum, item) => sum + investigationCharge(item), 0);
-  const [order] = await db.insert(labOrders).values({
-    orderNumber: prefixNumber("LAB"),
-    claimId: prefixNumber("CLA"),
-    claimCheckCode: body.claimCheckCode?.trim() || null,
-    patientId: body.patientId,
-    facilityId: body.facilityId,
-    createdBy: req.appUser!.id,
-    clinicianName: body.clinicianName,
-    notes: body.notes,
-    totalAmount: total.toFixed(2),
-  }).returning();
-  await db.insert(orderItems).values(selected.map((item) => ({
-    orderId: order.id,
-    investigationId: item.id,
-    quantity: 1,
-    unitPrice: investigationCharge(item).toFixed(2),
-    lineTotal: investigationCharge(item).toFixed(2),
-  })));
-  res.status(201).json(await db.query.labOrders.findFirst({ where: eq(labOrders.id, order.id) }));
+  const order = await db.transaction(async (tx) => {
+    if (body.isInsured !== undefined) {
+      await tx.update(patients).set({
+        isInsured: body.isInsured,
+        nhisNumber: body.nhisNumber?.trim() || null,
+        nhisStatus: body.nhisStatus?.trim() || null,
+      }).where(eq(patients.id, patient.id));
+    }
+    const [createdOrder] = await tx.insert(labOrders).values({
+      orderNumber: prefixNumber("LAB"),
+      claimId: prefixNumber("CLA"),
+      claimCheckCode: body.claimCheckCode?.trim() || null,
+      isInsured: body.isInsured ?? patient.isInsured,
+      patientId: body.patientId,
+      facilityId: body.facilityId,
+      createdBy: req.appUser!.id,
+      clinicianName: body.clinicianName,
+      notes: body.notes,
+      totalAmount: total.toFixed(2),
+    }).returning();
+    await tx.insert(orderItems).values(selected.map((item) => ({
+      orderId: createdOrder.id,
+      investigationId: item.id,
+      quantity: 1,
+      unitPrice: investigationCharge(item).toFixed(2),
+      lineTotal: investigationCharge(item).toFixed(2),
+    })));
+    return createdOrder;
+  });
+  res.status(201).json(order);
 }));
 
 api.get("/orders", asyncRoute(async (req, res) => {
@@ -1378,16 +1387,18 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
 }));
 
 api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, res) => {
- const from = typeof req.query.from === "string" ? new Date(`${req.query.from}T00:00:00Z`) : null;
- const to = typeof req.query.to === "string" ? new Date(`${req.query.to}T23:59:59Z`) : null;
+ const from = typeof req.query.from === "string" && req.query.from
+   ? new Date(`${req.query.from}T00:00:00Z`) : null;
+ const to = typeof req.query.to === "string" && req.query.to
+   ? exclusiveEndDate(req.query.to) : null;
  const page = Math.max(1, Number(req.query.page || 1) || 1);
  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
  const offset = (page - 1) * pageSize;
  const conditions = [
-   eq(patients.isInsured, true),
+   eq(labOrders.isInsured, true),
  ];
  if (from && !Number.isNaN(from.getTime())) conditions.push(gte(labOrders.createdAt, from));
- if (to && !Number.isNaN(to.getTime())) conditions.push(lte(labOrders.createdAt, new Date(`${req.query.to}T23:59:59Z`)));
+ if (to && !Number.isNaN(to.getTime())) conditions.push(sql`${labOrders.createdAt} < ${to}`);
 
  const [attendanceRows, countRows] = await Promise.all([
   db.select({
@@ -1408,22 +1419,14 @@ api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, 
     .innerJoin(patients, eq(labOrders.patientId, patients.id))
     .where(and(...conditions)),
  ]);
- const allFilteredRows = await db.select({
-   id: labOrders.id,
-   patientId: labOrders.patientId,
+ const grandTotalRows = await db.select({
+   grandTotal: sql<string>`coalesce(sum(${investigations.coveredTariff}), 0)::text`,
  }).from(labOrders)
    .innerJoin(patients, eq(labOrders.patientId, patients.id))
+   .innerJoin(orderItems, eq(orderItems.orderId, labOrders.id))
+   .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
    .where(and(...conditions));
- let grandTotal = 0;
- for (const attendance of allFilteredRows) {
-   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, attendance.id));
-   for (const item of items) {
-     const investigation = await db.query.investigations.findFirst({
-       where: eq(investigations.id, item.investigationId),
-     });
-     grandTotal += investigation ? coveredInvestigationCost(investigation) : 0;
-   }
- }
+ const grandTotal = numberValue(grandTotalRows[0]?.grandTotal);
 
  const claims = await Promise.all(attendanceRows.map(async ({ patientId, ...attendance }) => {
    const patient = await db.query.patients.findFirst({ where: eq(patients.id, patientId) });
@@ -1489,6 +1492,8 @@ api.get("/nhia/claims/individual/:id/export", requireRole("admin"), asyncRoute(a
    const investigation = await db.query.investigations.findFirst({ where: eq(investigations.id, item.investigationId) });
    return `<investigation><serviceDate>${xmlEscape(dateOnly(attendance.createdAt))}</serviceDate><gdrgCode>${xmlEscape(investigation?.gdrgCode || investigation?.nhiaCode || "")}</gdrgCode></investigation>`;
  }))).join("");
+ const normalizedGender = (patient.gender || "").trim().toUpperCase();
+ const genderCode = normalizedGender.startsWith("F") ? "F" : normalizedGender.startsWith("M") ? "M" : normalizedGender;
  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<claims><claim>` +
    `<claimID>${xmlEscape(attendance.claimId)}</claimID>` +
    `<claimCheckCode>${xmlEscape(attendance.claimCheckCode)}</claimCheckCode>` +
@@ -1499,7 +1504,7 @@ api.get("/nhia/claims/individual/:id/export", requireRole("admin"), asyncRoute(a
    `<surname>${xmlEscape(patient.lastName)}</surname>` +
    `<otherNames>${xmlEscape(patient.firstName)}</otherNames>` +
    `<dateOfBirth>${xmlEscape(patient.dateOfBirth ? dateOnly(patient.dateOfBirth) : "")}</dateOfBirth>` +
-   `<gender>${xmlEscape((patient.gender || "").startsWith("F") ? "F" : (patient.gender || "").startsWith("M") ? "M" : (patient.gender || "").toUpperCase())}</gender>` +
+   `<gender>${xmlEscape(genderCode)}</gender>` +
    `<hospitalRecNo>${xmlEscape(patient.patientNumber)}</hospitalRecNo>` +
    `<isDependant>${isUnderThreeMonths(patient.dateOfBirth, attendance.createdAt) ? "1" : "0"}</isDependant>` +
    `<typeOfService>DIA</typeOfService><isUnbundled>1</isUnbundled><includesPharmacy>0</includesPharmacy>` +
@@ -1517,15 +1522,15 @@ api.get("/nhia/claims/export", requireRole("admin"), asyncRoute(async (req, res)
   const from = typeof req.query.from === "string" && req.query.from
     ? new Date(`${req.query.from}T00:00:00Z`) : null;
   const to = typeof req.query.to === "string" && req.query.to
-    ? new Date(`${req.query.to}T23:59:59Z`) : null;
+    ? exclusiveEndDate(req.query.to) : null;
   if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "The from date is invalid" });
   if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: "The to date is invalid" });
   if (from && to && from > to) return res.status(400).json({ error: "The from date cannot be after the to date" });
 
   const conditions: any[] = [];
   if (from) conditions.push(gte(labOrders.createdAt, from));
-  if (to) conditions.push(lte(labOrders.createdAt, to));
-  conditions.push(eq(patients.isInsured, true));
+  if (to) conditions.push(sql`${labOrders.createdAt} < ${to}`);
+  conditions.push(eq(labOrders.isInsured, true));
   const attendanceRows = await db.select({
     id: labOrders.id,
     claimId: labOrders.claimId,

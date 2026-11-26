@@ -207,6 +207,7 @@ export const labOrders = pgTable("lab_orders", {
   orderNumber: varchar("order_number", { length: 50 }).notNull().unique(),
   claimId: varchar("claim_id", { length: 50 }).notNull().unique(),
   claimCheckCode: varchar("claim_check_code", { length: 100 }),
+  isInsured: boolean("is_insured").notNull().default(false),
   patientId: uuid("patient_id").notNull().references(() => patients.id),
   facilityId: uuid("facility_id").notNull().references(() => facilities.id),
   createdBy: text("created_by").notNull().references(() => users.id),

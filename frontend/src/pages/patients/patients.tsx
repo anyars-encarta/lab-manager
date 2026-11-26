@@ -363,6 +363,18 @@ export function PatientsPage() {
         setRequestDialogOpen(false);
         setSelectedTests([]);
       }
+      setPatients((current) =>
+        current.map((patient) =>
+          patient.id === requestPatient.id
+            ? {
+                ...patient,
+                isInsured: requestIsInsured,
+                nhisNumber: nhisNumber || undefined,
+                nhisStatus: nhisStatus || undefined,
+              }
+            : patient,
+        ),
+      );
       setSuccess({
         patientNumber: requestPatient.patientNumber,
         orderNumber: body.orderNumber || "",
@@ -446,6 +458,18 @@ export function PatientsPage() {
             existingPatient.firstName
           } ${existingPatient.lastName}.`,
         });
+        setPatients((current) =>
+          current.map((patient) =>
+            patient.id === existingPatient.id
+              ? {
+                  ...patient,
+                  isInsured,
+                  nhisNumber: nhisNumber || undefined,
+                  nhisStatus: nhisStatus || undefined,
+                }
+              : patient,
+          ),
+        );
         setSuccess({
           patientNumber: existingPatient.patientNumber,
           orderNumber: body.orderNumber || "",
@@ -703,7 +727,10 @@ export function PatientsPage() {
                       <Field name="notes" label="Clinical notes" />
                     </>
                   )}
-                  <div className="space-y-3 rounded-lg border p-4">
+                  <div
+                    key={`main-insurance-${selectedExistingPatientId || "new"}-${isInsured}`}
+                    className="space-y-3 rounded-lg border p-4"
+                  >
                     <div className="space-y-2">
                       <Label>Patient insurance</Label>
                       <input type="hidden" name="isInsured" value={String(isInsured)} />
@@ -722,10 +749,23 @@ export function PatientsPage() {
                     </div>
                     {isInsured && (
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <Field name="nhisNumber" label="NHIS number" required />
+                        <Field
+                          name="nhisNumber"
+                          label="NHIS number"
+                          required
+                          defaultValue={
+                            patients.find((patient) => patient.id === selectedExistingPatientId)?.nhisNumber || ""
+                          }
+                        />
                         <div className="space-y-2">
                           <Label>NHIS status</Label>
-                          <Select name="nhisStatus" required>
+                          <Select
+                            name="nhisStatus"
+                            required
+                            defaultValue={
+                              patients.find((patient) => patient.id === selectedExistingPatientId)?.nhisStatus
+                            }
+                          >
                             <SelectTrigger>
                               <SelectValue placeholder="Select status" />
                             </SelectTrigger>
@@ -897,7 +937,10 @@ export function PatientsPage() {
                 </div>
                 <Field name="clinicianName" label="Referring clinician" />
               </div>
-              <div className="space-y-3 rounded-lg border p-4">
+              <div
+                key={`request-insurance-${requestPatient?.id || "none"}-${requestIsInsured}`}
+                className="space-y-3 rounded-lg border p-4"
+              >
                 <div className="space-y-2">
                   <Label>Patient insurance</Label>
                   <Select
@@ -915,10 +958,15 @@ export function PatientsPage() {
                 </div>
                 {requestIsInsured && (
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <Field name="nhisNumber" label="NHIS number" required />
+                    <Field
+                      name="nhisNumber"
+                      label="NHIS number"
+                      required
+                      defaultValue={requestPatient?.nhisNumber || ""}
+                    />
                     <div className="space-y-2">
                       <Label>NHIS status</Label>
-                      <Select name="nhisStatus" required>
+                      <Select name="nhisStatus" required defaultValue={requestPatient?.nhisStatus}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select status" />
                         </SelectTrigger>
@@ -1127,16 +1175,18 @@ function Field({
   label,
   type = "text",
   required = false,
+  defaultValue,
 }: {
   name: string;
   label: string;
   type?: string;
   required?: boolean;
+  defaultValue?: string;
 }) {
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{label}</Label>
-      <Input id={name} name={name} type={type} required={required} />
+      <Input id={name} name={name} type={type} required={required} defaultValue={defaultValue} />
     </div>
   );
 }
