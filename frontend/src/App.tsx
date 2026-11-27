@@ -29,6 +29,7 @@ import { PatientsPage } from "./pages/patients/patients";
 import { ReferringFacilitiesPage } from "./pages/facilities/referring-facilities";
 import { LaboratoryProfilePage } from "./pages/setup/laboratory-profile";
 import { InvestigationsPage } from "./pages/investigations/investigations";
+import { ReportsPage } from "./pages/reports/reports";
 import { Login } from "./pages/login";
 import { authProvider } from "./providers/auth";
 import { dataProvider } from "./providers/data";
@@ -61,7 +62,7 @@ function ResourceGuard({
     (resource === "patients" && role === "frontdesk") ||
     (resource === "orders" && ["frontdesk", "account", "technician"].includes(role || "")) ||
     (resource === "investigations" && ["frontdesk", "technician"].includes(role || "")) ||
-    (resource === "reports" && role === "doctor");
+    (resource === "reports" && ["admin", "doctor", "account"].includes(role || ""));
   if (allowed && resource === "patients") {
     return <PatientsPage />;
   }
@@ -73,6 +74,9 @@ function ResourceGuard({
   }
   if (allowed && resource === "investigations") {
     return <InvestigationsPage canWrite={role === "admin"} />;
+  }
+  if (allowed && resource === "reports") {
+    return <ReportsPage />;
   }
   return allowed ? <LaboratoryWorkspace section={section} /> : <LoadingWorkspace />;
 }
@@ -93,7 +97,7 @@ const accessControlProvider: AccessControlProvider = {
       if (resource === "orders" && action === "create") return { can: role === "frontdesk" };
       if (resource === "orders" && action === "edit") return { can: ["account", "technician"].includes(role) };
       if (resource === "investigations" && action === "list") return { can: ["frontdesk", "technician"].includes(role) };
-      if (resource === "reports" && action === "list") return { can: role === "doctor" };
+      if (resource === "reports" && action === "list") return { can: ["admin", "doctor", "account"].includes(role) };
       if (resource === "claims") return { can: false };
       if (resource === "laboratory-profile") return { can: false };
       if (resource === "facilities" || resource === "users") return { can: false };

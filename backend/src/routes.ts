@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { auth } from "./auth.js";
@@ -42,6 +42,17 @@ const exclusiveEndDate = (dateValue: string) => {
   const date = new Date(`${dateValue}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date;
+};
+const normalizeExclusiveClaimEnd = (value: Date) => {
+  if (
+    value.getUTCHours() === 23 &&
+    value.getUTCMinutes() === 59 &&
+    value.getUTCSeconds() === 59
+  ) {
+    value.setUTCDate(value.getUTCDate() + 1);
+    value.setUTCHours(0, 0, 0, 0);
+  }
+  return value;
 };
 const isUnderThreeMonths = (birthDate: Date | null, at: Date = new Date()) => {
   if (!birthDate) return false;
@@ -1425,10 +1436,17 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   pdf.end();
 }));
 
-api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (req, res) => {
-  const from = typeof req.query.from === "string" ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
-  const to = typeof req.query.to === "string" ? new Date(req.query.to) : new Date();
-  const rows = await db.select().from(labOrders).where(and(gte(labOrders.createdAt, from), lte(labOrders.createdAt, to)));
+api.get("/reports/summary", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  const from = typeof req.query.from === "string" && req.query.from
+    ? new Date(`${req.query.from}T00:00:00Z`)
+    : new Date(Date.now() - 30 * 86400000);
+  const to = typeof req.query.to === "string" && req.query.to
+    ? exclusiveEndDate(req.query.to)
+    : new Date();
+  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : "";
+  const conditions = [gte(labOrders.createdAt, from), lt(labOrders.createdAt, to)];
+  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+  const rows = await db.select().from(labOrders).where(and(...conditions));
   res.json({
     period: { from, to },
     totalOrders: rows.length,
@@ -1437,6 +1455,364 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
     totalBilled: rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0),
     totalCollected: rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0),
   });
+}));
+
+api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontdesk", "technician"), asyncRoute(async (_req, res) => {
+  const now = new Date();
+  const periodStart = new Date(now);
+  periodStart.setUTCDate(periodStart.getUTCDate() - 29);
+  periodStart.setUTCHours(0, 0, 0, 0);
+
+  const [
+    orderRows,
+    patientCountRows,
+    investigationCountRows,
+    recentPayments,
+    recentResultRows,
+    utilizationRows,
+  ] = await Promise.all([
+    db.select().from(labOrders)
+      .where(gte(labOrders.createdAt, periodStart))
+      .orderBy(desc(labOrders.createdAt)),
+    db.select({ count: sql<number>`count(*)::int` }).from(patients),
+    db.select({ count: sql<number>`count(*)::int` }).from(investigations).where(eq(investigations.active, true)),
+    db.select({
+      amount: payments.amount,
+      method: payments.method,
+      receivedAt: payments.receivedAt,
+    }).from(payments).where(gte(payments.receivedAt, periodStart)),
+    db.select({ id: resultEntries.id }).from(resultEntries)
+      .where(gte(resultEntries.enteredAt, periodStart)),
+    db.select({
+      investigationId: investigations.id,
+      name: investigations.name,
+      quantity: orderItems.quantity,
+    }).from(orderItems)
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .where(gte(labOrders.createdAt, periodStart)),
+  ]);
+
+  const dailyMap = new Map<string, { date: string; orders: number; billed: number; collected: number }>();
+  for (let offset = 29; offset >= 0; offset -= 1) {
+    const date = new Date(periodStart);
+    date.setUTCDate(date.getUTCDate() + (29 - offset));
+    dailyMap.set(date.toISOString().slice(0, 10), {
+      date: date.toLocaleDateString("en-GH", { month: "short", day: "numeric", timeZone: "UTC" }),
+      orders: 0,
+      billed: 0,
+      collected: 0,
+    });
+  }
+  for (const order of orderRows) {
+    const key = order.createdAt.toISOString().slice(0, 10);
+    const bucket = dailyMap.get(key);
+    if (bucket) {
+      bucket.orders += 1;
+      bucket.billed += numberValue(order.totalAmount);
+    }
+  }
+  for (const payment of recentPayments) {
+    const key = payment.receivedAt.toISOString().slice(0, 10);
+    const bucket = dailyMap.get(key);
+    if (bucket) {
+      bucket.collected += numberValue(payment.amount);
+    }
+  }
+
+  const statusCounts = ["draft", "awaiting_payment", "paid", "processing", "completed", "cancelled"].map((status) => ({
+    status: status.replace(/_/g, " "),
+    value: orderRows.filter((order) => order.status === status).length,
+  })).filter((item) => item.value > 0);
+
+  const paymentMap = new Map<string, number>();
+  for (const payment of recentPayments) {
+    const method = payment.method.replace(/_/g, " ");
+    paymentMap.set(method, (paymentMap.get(method) || 0) + numberValue(payment.amount));
+  }
+  const paymentBreakdown = Array.from(paymentMap.entries()).map(([method, amount]) => ({ method, amount }));
+
+  const investigationMap = new Map<string, { name: string; requests: number }>();
+  for (const item of utilizationRows) {
+    const current = investigationMap.get(item.investigationId) || { name: item.name, requests: 0 };
+    current.requests += Number(item.quantity || 1);
+    investigationMap.set(item.investigationId, current);
+  }
+  const topInvestigations = Array.from(investigationMap.values())
+    .sort((a, b) => b.requests - a.requests)
+    .slice(0, 8);
+
+  const totalBilled = orderRows.reduce((sum, order) => sum + numberValue(order.totalAmount), 0);
+  const paymentTotal = recentPayments.reduce((sum, payment) => sum + numberValue(payment.amount), 0);
+  const totalCollected = paymentTotal;
+  const outstanding = orderRows.reduce(
+    (sum, order) => sum + Math.max(0, numberValue(order.totalAmount) - numberValue(order.paidAmount)),
+    0,
+  );
+
+  res.json({
+    periodStart,
+    periodEnd: now,
+    kpis: {
+      patients: Number(patientCountRows[0]?.count || 0),
+      activeInvestigations: Number(investigationCountRows[0]?.count || 0),
+      totalOrders: orderRows.length,
+      completed: orderRows.filter((order) => order.status === "completed").length,
+      pending: orderRows.filter((order) => !["completed", "cancelled"].includes(order.status)).length,
+      insuredOrders: orderRows.filter((order) => order.isInsured).length,
+      resultEntries: recentResultRows.length,
+      totalBilled,
+      totalCollected,
+      outstanding,
+      payments: paymentTotal,
+      paymentCount: recentPayments.length,
+    },
+    daily: Array.from(dailyMap.values()),
+    statusBreakdown: statusCounts,
+    paymentBreakdown,
+    topInvestigations,
+  });
+}));
+
+const getReportData = async (query: Record<string, unknown>) => {
+  const type = typeof query.type === "string" ? query.type : "orders";
+  const from = typeof query.from === "string" && query.from
+    ? new Date(`${query.from}T00:00:00Z`)
+    : null;
+  const to = typeof query.to === "string" && query.to
+    ? exclusiveEndDate(query.to)
+    : null;
+  const facilityId = typeof query.facilityId === "string" ? query.facilityId : "";
+  const status = typeof query.status === "string" ? query.status : "";
+  const paymentStatus = typeof query.paymentStatus === "string" ? query.paymentStatus : "";
+  const search = typeof query.search === "string" ? query.search.trim() : "";
+  const orderStatusFilter = status as "draft" | "awaiting_payment" | "paid" | "processing" | "completed" | "cancelled";
+  const paymentStatusFilter = paymentStatus as "pending" | "partial" | "paid" | "refunded";
+
+  if (type === "summary") {
+    const conditions = [];
+    if (from) conditions.push(gte(labOrders.createdAt, from));
+    if (to) conditions.push(lt(labOrders.createdAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select().from(labOrders)
+      .where(conditions.length ? and(...conditions) : undefined);
+    const summary = {
+      totalOrders: rows.length,
+      completedOrders: rows.filter((row) => row.status === "completed").length,
+      pendingOrders: rows.filter((row) => row.status !== "completed" && row.status !== "cancelled").length,
+      cancelledOrders: rows.filter((row) => row.status === "cancelled").length,
+      totalBilled: rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0),
+      totalCollected: rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0),
+      outstandingBalance: rows.reduce((sum, row) => sum + Math.max(0, numberValue(row.totalAmount) - numberValue(row.paidAmount)), 0),
+    };
+    return { rows: [summary], total: summary.totalBilled, collected: summary.totalCollected, period: { from, to } };
+  }
+
+  if (type === "payments") {
+    const conditions = [];
+    if (from) conditions.push(gte(payments.receivedAt, from));
+    if (to) conditions.push(lt(payments.receivedAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
+    if (search) conditions.push(or(
+      ilike(payments.receiptNumber, `%${search}%`),
+      ilike(payments.reference, `%${search}%`),
+      ilike(labOrders.orderNumber, `%${search}%`),
+    ));
+    const rows = await db.select({
+      id: payments.id,
+      receiptNumber: payments.receiptNumber,
+      orderNumber: labOrders.orderNumber,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      amount: payments.amount,
+      method: payments.method,
+      reference: payments.reference,
+      receivedAt: payments.receivedAt,
+    }).from(payments)
+      .innerJoin(labOrders, eq(payments.orderId, labOrders.id))
+      .innerJoin(patients, eq(labOrders.patientId, patients.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(payments.receivedAt));
+    const total = rows.reduce((sum, row) => sum + numberValue(row.amount), 0);
+    return { rows, total, period: { from, to } };
+  }
+
+  if (type === "investigations") {
+    const conditions = [];
+    if (from) conditions.push(gte(labOrders.createdAt, from));
+    if (to) conditions.push(lt(labOrders.createdAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select({
+      id: investigations.id,
+      code: investigations.code,
+      name: investigations.name,
+      category: investigations.category,
+      quantity: orderItems.quantity,
+      lineTotal: orderItems.lineTotal,
+    }).from(orderItems)
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .where(conditions.length ? and(...conditions) : undefined);
+    const grouped = new Map<string, any>();
+    for (const row of rows) {
+      const current = grouped.get(row.id) || {
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        category: row.category || "",
+        requests: 0,
+        revenue: 0,
+      };
+      current.requests += Number(row.quantity || 1);
+      current.revenue += numberValue(row.lineTotal);
+      grouped.set(row.id, current);
+    }
+    const result = Array.from(grouped.values()).sort((a, b) => b.requests - a.requests);
+    return { rows: result, total: result.reduce((sum, row) => sum + row.revenue, 0), period: { from, to } };
+  }
+
+  if (type === "patients") {
+    const conditions = [];
+    if (from) conditions.push(gte(patients.createdAt, from));
+    if (to) conditions.push(lt(patients.createdAt, to));
+    if (facilityId) conditions.push(eq(patients.facilityId, facilityId));
+    if (search) conditions.push(or(
+      ilike(patients.patientNumber, `%${search}%`),
+      ilike(patients.firstName, `%${search}%`),
+      ilike(patients.lastName, `%${search}%`),
+      ilike(patients.phone, `%${search}%`),
+    ));
+    const rows = await db.select({
+      id: patients.id,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      gender: patients.gender,
+      dateOfBirth: patients.dateOfBirth,
+      phone: patients.phone,
+      nhisNumber: patients.nhisNumber,
+      isInsured: patients.isInsured,
+      createdAt: patients.createdAt,
+    }).from(patients)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(patients.createdAt));
+    return { rows, total: rows.length, period: { from, to } };
+  }
+
+  if (type === "results") {
+    const conditions = [];
+    if (from) conditions.push(gte(resultEntries.enteredAt, from));
+    if (to) conditions.push(lt(resultEntries.enteredAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select({
+      id: resultEntries.id,
+      orderNumber: labOrders.orderNumber,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      investigation: investigations.name,
+      parameter: parameters.name,
+      value: resultEntries.value,
+      unit: parameters.unit,
+      abnormalFlag: resultEntries.abnormalFlag,
+      remarks: resultEntries.remarks,
+      enteredAt: resultEntries.enteredAt,
+    }).from(resultEntries)
+      .innerJoin(parameters, eq(resultEntries.parameterId, parameters.id))
+      .innerJoin(orderItems, eq(resultEntries.orderItemId, orderItems.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .innerJoin(patients, eq(labOrders.patientId, patients.id))
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(resultEntries.enteredAt));
+    return { rows, total: rows.length, period: { from, to } };
+  }
+
+  const conditions = [];
+  if (from) conditions.push(gte(labOrders.createdAt, from));
+  if (to) conditions.push(lt(labOrders.createdAt, to));
+  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+  if (status) conditions.push(eq(labOrders.status, orderStatusFilter));
+  if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
+  if (search) conditions.push(or(
+    ilike(labOrders.orderNumber, `%${search}%`),
+    ilike(patients.patientNumber, `%${search}%`),
+    ilike(patients.firstName, `%${search}%`),
+    ilike(patients.lastName, `%${search}%`),
+  ));
+  const rows = await db.select({
+    id: labOrders.id,
+    orderNumber: labOrders.orderNumber,
+    patientNumber: patients.patientNumber,
+    patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+    status: labOrders.status,
+    paymentStatus: labOrders.paymentStatus,
+    totalAmount: labOrders.totalAmount,
+    paidAmount: labOrders.paidAmount,
+    createdAt: labOrders.createdAt,
+  }).from(labOrders)
+    .innerJoin(patients, eq(labOrders.patientId, patients.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(labOrders.createdAt));
+  const total = rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0);
+  const collected = rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0);
+  return { rows, total, collected, period: { from, to } };
+};
+
+api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  res.json(await getReportData(req.query as unknown as Record<string, unknown>));
+}));
+
+api.get("/reports/export", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  const format = req.query.format === "pdf" ? "pdf" : "excel";
+  const type = typeof req.query.type === "string" ? req.query.type : "orders";
+  const report = await getReportData(
+    Object.fromEntries(
+      Object.entries(req.query).filter(([key]) => key !== "format" && key !== "download"),
+    ) as Record<string, unknown>,
+  );
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const title = `${type.charAt(0).toUpperCase()}${type.slice(1)} report`;
+
+  if (format === "pdf") {
+    res.setHeader("Content-Type", "application/pdf");
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Disposition", `${disposition}; filename="${type}-report.pdf"`);
+    const pdf = new PDFDocument({ size: "A4", layout: "landscape", margin: 36 });
+    pdf.pipe(res);
+    pdf.fontSize(16).text(title, { align: "center" });
+    pdf.moveDown();
+    if (rows.length === 0) {
+      pdf.fontSize(10).text("No records found for the selected filters.");
+    } else {
+      const headers = Object.keys(rows[0]).filter((key) => key !== "id");
+      pdf.fontSize(8);
+      pdf.text(headers.map((header) => header.replace(/([A-Z])/g, " $1")).join(" | "));
+      pdf.moveDown(0.5);
+      rows.forEach((row: Record<string, unknown>) => {
+        pdf.text(headers.map((header) => {
+          const value = row[header];
+          if (value instanceof Date) return value.toLocaleString();
+          return String(value ?? "");
+        }).join(" | "), { width: pdf.page.width - 72 });
+      });
+    }
+    pdf.end();
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/vnd.ms-excel");
+  res.setHeader("Content-Disposition", `attachment; filename="${type}-report.xls"`);
+  const headers = rows.length ? Object.keys(rows[0]).filter((key) => key !== "id") : ["No records"];
+  const escapeXml = (value: unknown) => xmlEscape(value instanceof Date ? value.toISOString() : value);
+  const workbook = `<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="${xmlEscape(title)}"><Table>
+ <Row>${headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`).join("")}</Row>
+ ${rows.map((row: Record<string, unknown>) => `<Row>${headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(row[header])}</Data></Cell>`).join("")}</Row>`).join("")}
+ </Table></Worksheet>
+</Workbook>`;
+  res.send(workbook);
 }));
 
 api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, res) => {
@@ -1672,12 +2048,18 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
     claimPeriodEnd: z.iso.datetime(),
   }).parse(req.body);
   const start = new Date(body.claimPeriodStart);
-  const end = new Date(body.claimPeriodEnd);
+  const end = normalizeExclusiveClaimEnd(new Date(body.claimPeriodEnd));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return res.status(400).json({ error: "The claim period contains an invalid date" });
+  }
+  if (start >= end) {
+    return res.status(400).json({ error: "The claim period end must be after the start" });
+  }
   const batchFacility = (await db.select().from(facilities).orderBy(asc(facilities.name)).limit(1))[0];
   if (!batchFacility) return res.status(400).json({ error: "At least one facility is required" });
   const eligibleOrders = await db.select().from(labOrders).where(and(
     gte(labOrders.createdAt, start),
-    lte(labOrders.createdAt, end),
+    lt(labOrders.createdAt, end),
   ));
   const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
   const nhiaPayload = await Promise.all(eligibleOrders.map(async (order) => {

@@ -459,7 +459,11 @@ export function LaboratoryWorkspace({ section }: Props) {
             claimPeriodStart: new Date(
               `${values.from}T00:00:00Z`,
             ).toISOString(),
-            claimPeriodEnd: new Date(`${values.to}T23:59:59Z`).toISOString(),
+            claimPeriodEnd: (() => {
+              const end = new Date(`${values.to}T00:00:00Z`);
+              end.setUTCDate(end.getUTCDate() + 1);
+              return end.toISOString();
+            })(),
           }),
         });
         if (!response.ok)
@@ -1966,6 +1970,7 @@ function RecordTable({
                         <Button
                           size="sm"
                           variant="outline"
+                          className="cursor-pointer"
                           onClick={() => onReceivePayment?.(row)}
                         >
                           Receive payment

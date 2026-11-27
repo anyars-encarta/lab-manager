@@ -5,11 +5,29 @@ import {
   Activity,
   Banknote,
   ClipboardCheck,
+  CreditCard,
   FlaskConical,
+  HeartPulse,
   Microscope,
+  ShieldCheck,
   Users,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "@/components/refine-ui/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -17,29 +35,54 @@ import { Button } from "@/components/ui/button";
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 type Identity = { name?: string; email: string; role: string };
-type Summary = { totalOrders: number; completed: number; pending: number; totalBilled: number; totalCollected: number };
+type DashboardData = {
+  kpis: {
+    patients: number;
+    activeInvestigations: number;
+    totalOrders: number;
+    completed: number;
+    pending: number;
+    insuredOrders: number;
+    resultEntries: number;
+    totalBilled: number;
+    totalCollected: number;
+    outstanding: number;
+    payments: number;
+    paymentCount: number;
+  };
+  daily: { date: string; orders: number; billed: number; collected: number }[];
+  statusBreakdown: { status: string; value: number }[];
+  paymentBreakdown: { method: string; amount: number }[];
+  topInvestigations: { name: string; requests: number }[];
+};
 
 export function Dashboard() {
   const { data: identity } = useGetIdentity<Identity>();
-  const [summary, setSummary] = useState<Summary | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [summaryError, setSummaryError] = useState("");
   const [ordersError, setOrdersError] = useState("");
-  const summaryGeneration = useRef(0);
+  const dashboardGeneration = useRef(0);
   const ordersGeneration = useRef(0);
 
   const loadSummary = async () => {
-    const generation = ++summaryGeneration.current;
+    const generation = ++dashboardGeneration.current;
+    setDashboardLoaded(false);
     setSummaryError("");
     try {
-      const response = await fetch(`${API_URL}/api/reports/summary`, { credentials: "include" });
-      if (!response.ok) throw new Error(`Summary request failed (${response.status})`);
+      const response = await fetch(`${API_URL}/api/reports/dashboard`, { credentials: "include" });
+      if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
       const data = await response.json();
-      if (generation === summaryGeneration.current) setSummary(data);
+      if (generation === dashboardGeneration.current) {
+        setDashboard(data);
+        setDashboardLoaded(true);
+      }
     } catch (error) {
-      if (generation === summaryGeneration.current) {
-        setSummary(null);
+      if (generation === dashboardGeneration.current) {
+        setDashboard(null);
+        setDashboardLoaded(true);
         setSummaryError(error instanceof Error ? error.message : "Unable to load summary");
       }
     }
@@ -53,9 +96,10 @@ export function Dashboard() {
       const response = await fetch(`${API_URL}/api/orders`, { credentials: "include" });
       if (!response.ok) throw new Error(`Orders request failed (${response.status})`);
       const data = await response.json();
-      if (!Array.isArray(data)) throw new Error("Invalid orders response");
+      const orderRows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : null;
+      if (!orderRows) throw new Error("Invalid orders response");
       if (generation === ordersGeneration.current) {
-        setOrders(data.slice(0, 6));
+        setOrders(orderRows.slice(0, 6));
         setOrdersLoaded(true);
       }
     } catch (error) {
@@ -73,10 +117,15 @@ export function Dashboard() {
   }, []);
 
   const cards = [
-    { title: "Total orders", value: summary?.totalOrders ?? "—", detail: "Selected period", icon: ClipboardCheck, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
-    { title: "Completed", value: summary?.completed ?? "—", detail: "Released reports", icon: FlaskConical, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
-    { title: "Pending", value: summary?.pending ?? "—", detail: "Active workflow", icon: Activity, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
-    { title: "Collected", value: summary ? `GH₵ ${Number(summary.totalCollected).toLocaleString()}` : "—", detail: "Payments received", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
+    { title: "Registered patients", value: dashboard?.kpis.patients ?? "—", detail: "All registered patients", icon: Users, color: "text-sky-600", bg: "bg-sky-50 dark:bg-sky-950/30" },
+    { title: "Active investigations", value: dashboard?.kpis.activeInvestigations ?? "—", detail: "Available test services", icon: Microscope, color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
+    { title: "Laboratory orders", value: dashboard?.kpis.totalOrders ?? "—", detail: "Last 30 days", icon: ClipboardCheck, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
+    { title: "Completed reports", value: dashboard?.kpis.completed ?? "—", detail: "Completed orders created in 30 days", icon: FlaskConical, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+    { title: "Pending workflow", value: dashboard?.kpis.pending ?? "—", detail: "Orders not released", icon: Activity, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
+    { title: "Insured orders", value: dashboard?.kpis.insuredOrders ?? "—", detail: "NHIS/insured requests", icon: ShieldCheck, color: "text-cyan-600", bg: "bg-cyan-50 dark:bg-cyan-950/30" },
+    { title: "Revenue collected", value: dashboard ? `GH₵ ${Number(dashboard.kpis.payments).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—", detail: "Payments received in 30 days", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
+    { title: "Outstanding balance", value: dashboard ? `GH₵ ${Number(dashboard.kpis.outstanding).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—", detail: "Unpaid order balances", icon: CreditCard, color: "text-rose-600", bg: "bg-rose-50 dark:bg-rose-950/30" },
+    { title: "Result entries", value: dashboard?.kpis.resultEntries ?? "—", detail: "Entered in 30 days", icon: HeartPulse, color: "text-fuchsia-600", bg: "bg-fuchsia-50 dark:bg-fuchsia-950/30" },
   ];
 
   return (
@@ -88,7 +137,7 @@ export function Dashboard() {
         <p className="mt-1 text-sm text-muted-foreground">Here is what is happening across the laboratory today.</p>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {cards.map((card, index) => (
           <Card key={card.title} className="animate-in fade-in slide-in-from-bottom-4 border shadow-sm" style={{ animationDelay: `${index * 70}ms` }}>
             <CardContent className="flex items-start justify-between p-5">
@@ -103,6 +152,111 @@ export function Dashboard() {
             </CardContent>
           </Card>
         ))}
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[1.6fr_0.7fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Orders and revenue</CardTitle>
+            <CardDescription>Daily laboratory activity for the last 30 days</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.daily.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dashboard.daily}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
+                  <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(value: number | string, name: string) => name === "Orders" ? [value, name] : [`GH₵ ${Number(value).toLocaleString()}`, name]} />
+                  <Legend />
+                  <Area yAxisId="left" type="monotone" dataKey="orders" name="Orders" stroke="#2563eb" fill="#2563eb" fillOpacity={0.18} />
+                  <Area yAxisId="right" type="monotone" dataKey="collected" name="Collected" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">No activity data</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Order status</CardTitle>
+            <CardDescription>Current 30-day workflow mix</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.statusBreakdown.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={dashboard.statusBreakdown} dataKey="value" nameKey="status" cx="50%" cy="46%" outerRadius={82} label>
+                    {dashboard.statusBreakdown.map((_, index) => (
+                      <Cell key={index} fill={["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#06b6d4", "#ef4444"][index % 6]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">No order status data</div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Top investigations</CardTitle>
+            <CardDescription>Most requested tests in the last 30 days</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.topInvestigations.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dashboard.topInvestigations} layout="vertical" margin={{ left: 20, right: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Bar dataKey="requests" name="Requests" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">No investigation requests</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Payments by method</CardTitle>
+            <CardDescription>Revenue distribution for the last 30 days</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.paymentBreakdown.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dashboard.paymentBreakdown}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="method" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(value: number | string) => [`GH₵ ${Number(value).toLocaleString()}`, "Revenue"]} />
+                  <Bar dataKey="amount" name="Revenue" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">No payments recorded</div>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
       {(summaryError || ordersError) && (
