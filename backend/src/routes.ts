@@ -1425,10 +1425,17 @@ api.get("/orders/:id/report", asyncRoute(async (req, res) => {
   pdf.end();
 }));
 
-api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (req, res) => {
-  const from = typeof req.query.from === "string" ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
-  const to = typeof req.query.to === "string" ? new Date(req.query.to) : new Date();
-  const rows = await db.select().from(labOrders).where(and(gte(labOrders.createdAt, from), lte(labOrders.createdAt, to)));
+api.get("/reports/summary", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  const from = typeof req.query.from === "string" && req.query.from
+    ? new Date(`${req.query.from}T00:00:00Z`)
+    : new Date(Date.now() - 30 * 86400000);
+  const to = typeof req.query.to === "string" && req.query.to
+    ? exclusiveEndDate(req.query.to)
+    : new Date();
+  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : "";
+  const conditions = [gte(labOrders.createdAt, from), lte(labOrders.createdAt, to)];
+  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+  const rows = await db.select().from(labOrders).where(and(...conditions));
   res.json({
     period: { from, to },
     totalOrders: rows.length,
@@ -1437,6 +1444,250 @@ api.get("/reports/summary", requireRole("admin", "doctor"), asyncRoute(async (re
     totalBilled: rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0),
     totalCollected: rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0),
   });
+}));
+
+api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  const type = typeof req.query.type === "string" ? req.query.type : "orders";
+  const from = typeof req.query.from === "string" && req.query.from
+    ? new Date(`${req.query.from}T00:00:00Z`)
+    : null;
+  const to = typeof req.query.to === "string" && req.query.to
+    ? exclusiveEndDate(req.query.to)
+    : null;
+  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : "";
+  const status = typeof req.query.status === "string" ? req.query.status : "";
+  const paymentStatus = typeof req.query.paymentStatus === "string" ? req.query.paymentStatus : "";
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const orderStatusFilter = status as "draft" | "awaiting_payment" | "paid" | "processing" | "completed" | "cancelled";
+  const paymentStatusFilter = paymentStatus as "pending" | "partial" | "paid" | "refunded";
+
+  if (type === "summary") {
+    const conditions = [];
+    if (from) conditions.push(gte(labOrders.createdAt, from));
+    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select().from(labOrders)
+      .where(conditions.length ? and(...conditions) : undefined);
+    const summary = {
+      totalOrders: rows.length,
+      completedOrders: rows.filter((row) => row.status === "completed").length,
+      pendingOrders: rows.filter((row) => row.status !== "completed" && row.status !== "cancelled").length,
+      cancelledOrders: rows.filter((row) => row.status === "cancelled").length,
+      totalBilled: rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0),
+      totalCollected: rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0),
+      outstandingBalance: rows.reduce((sum, row) => sum + Math.max(0, numberValue(row.totalAmount) - numberValue(row.paidAmount)), 0),
+    };
+    return res.json({ rows: [summary], total: summary.totalBilled, collected: summary.totalCollected, period: { from, to } });
+  }
+
+  if (type === "payments") {
+    const conditions = [];
+    if (from) conditions.push(gte(payments.receivedAt, from));
+    if (to) conditions.push(lte(payments.receivedAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
+    if (search) conditions.push(or(
+      ilike(payments.receiptNumber, `%${search}%`),
+      ilike(payments.reference, `%${search}%`),
+      ilike(labOrders.orderNumber, `%${search}%`),
+    ));
+    const rows = await db.select({
+      id: payments.id,
+      receiptNumber: payments.receiptNumber,
+      orderNumber: labOrders.orderNumber,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      amount: payments.amount,
+      method: payments.method,
+      reference: payments.reference,
+      receivedAt: payments.receivedAt,
+    }).from(payments)
+      .innerJoin(labOrders, eq(payments.orderId, labOrders.id))
+      .innerJoin(patients, eq(labOrders.patientId, patients.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(payments.receivedAt));
+    const total = rows.reduce((sum, row) => sum + numberValue(row.amount), 0);
+    return res.json({ rows, total, period: { from, to } });
+  }
+
+  if (type === "investigations") {
+    const conditions = [];
+    if (from) conditions.push(gte(labOrders.createdAt, from));
+    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select({
+      id: investigations.id,
+      code: investigations.code,
+      name: investigations.name,
+      category: investigations.category,
+      quantity: orderItems.quantity,
+      lineTotal: orderItems.lineTotal,
+    }).from(orderItems)
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .where(conditions.length ? and(...conditions) : undefined);
+    const grouped = new Map<string, any>();
+    for (const row of rows) {
+      const current = grouped.get(row.id) || {
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        category: row.category || "",
+        requests: 0,
+        revenue: 0,
+      };
+      current.requests += Number(row.quantity || 1);
+      current.revenue += numberValue(row.lineTotal);
+      grouped.set(row.id, current);
+    }
+    const result = Array.from(grouped.values()).sort((a, b) => b.requests - a.requests);
+    return res.json({ rows: result, total: result.reduce((sum, row) => sum + row.revenue, 0), period: { from, to } });
+  }
+
+  if (type === "patients") {
+    const conditions = [];
+    if (from) conditions.push(gte(patients.createdAt, from));
+    if (to) conditions.push(lte(patients.createdAt, to));
+    if (facilityId) conditions.push(eq(patients.facilityId, facilityId));
+    if (search) conditions.push(or(
+      ilike(patients.patientNumber, `%${search}%`),
+      ilike(patients.firstName, `%${search}%`),
+      ilike(patients.lastName, `%${search}%`),
+      ilike(patients.phone, `%${search}%`),
+    ));
+    const rows = await db.select({
+      id: patients.id,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      gender: patients.gender,
+      dateOfBirth: patients.dateOfBirth,
+      phone: patients.phone,
+      nhisNumber: patients.nhisNumber,
+      isInsured: patients.isInsured,
+      createdAt: patients.createdAt,
+    }).from(patients)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(patients.createdAt));
+    return res.json({ rows, total: rows.length, period: { from, to } });
+  }
+
+  if (type === "results") {
+    const conditions = [];
+    if (from) conditions.push(gte(labOrders.createdAt, from));
+    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+    const rows = await db.select({
+      id: resultEntries.id,
+      orderNumber: labOrders.orderNumber,
+      patientNumber: patients.patientNumber,
+      patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+      investigation: investigations.name,
+      parameter: parameters.name,
+      value: resultEntries.value,
+      unit: parameters.unit,
+      abnormalFlag: resultEntries.abnormalFlag,
+      remarks: resultEntries.remarks,
+      enteredAt: resultEntries.enteredAt,
+    }).from(resultEntries)
+      .innerJoin(parameters, eq(resultEntries.parameterId, parameters.id))
+      .innerJoin(orderItems, eq(resultEntries.orderItemId, orderItems.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .innerJoin(patients, eq(labOrders.patientId, patients.id))
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(resultEntries.enteredAt));
+    return res.json({ rows, total: rows.length, period: { from, to } });
+  }
+
+  const conditions = [];
+  if (from) conditions.push(gte(labOrders.createdAt, from));
+  if (to) conditions.push(lte(labOrders.createdAt, to));
+  if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
+  if (status) conditions.push(eq(labOrders.status, orderStatusFilter));
+  if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
+  if (search) conditions.push(or(
+    ilike(labOrders.orderNumber, `%${search}%`),
+    ilike(patients.patientNumber, `%${search}%`),
+    ilike(patients.firstName, `%${search}%`),
+    ilike(patients.lastName, `%${search}%`),
+  ));
+  const rows = await db.select({
+    id: labOrders.id,
+    orderNumber: labOrders.orderNumber,
+    patientNumber: patients.patientNumber,
+    patientName: sql<string>`concat_ws(' ', ${patients.firstName}, ${patients.lastName})`,
+    status: labOrders.status,
+    paymentStatus: labOrders.paymentStatus,
+    totalAmount: labOrders.totalAmount,
+    paidAmount: labOrders.paidAmount,
+    createdAt: labOrders.createdAt,
+  }).from(labOrders)
+    .innerJoin(patients, eq(labOrders.patientId, patients.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(labOrders.createdAt));
+  const total = rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0);
+  const collected = rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0);
+  return res.json({ rows, total, collected, period: { from, to } });
+}));
+
+api.get("/reports/export", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  const format = req.query.format === "pdf" ? "pdf" : "excel";
+  const type = typeof req.query.type === "string" ? req.query.type : "orders";
+  const dataUrl = new URL(`${req.protocol}://${req.get("host")}/api/reports/data`);
+  for (const [key, value] of Object.entries(req.query)) {
+    if (typeof value === "string") dataUrl.searchParams.set(key, value);
+  }
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  const response = await fetch(`${baseUrl}/api/reports/data?${new URLSearchParams(
+    Object.fromEntries(Object.entries(req.query).filter(([key]) => key !== "format").map(([key, value]) => [key, String(value)])),
+  ).toString()}`, {
+    headers: { cookie: req.headers.cookie || "" },
+  });
+  if (!response.ok) throw new Error("Unable to generate report data");
+  const report = await response.json();
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const title = `${type.charAt(0).toUpperCase()}${type.slice(1)} report`;
+
+  if (format === "pdf") {
+    res.setHeader("Content-Type", "application/pdf");
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Disposition", `${disposition}; filename="${type}-report.pdf"`);
+    const pdf = new PDFDocument({ size: "A4", layout: "landscape", margin: 36 });
+    pdf.pipe(res);
+    pdf.fontSize(16).text(title, { align: "center" });
+    pdf.moveDown();
+    if (rows.length === 0) {
+      pdf.fontSize(10).text("No records found for the selected filters.");
+    } else {
+      const headers = Object.keys(rows[0]).filter((key) => key !== "id");
+      pdf.fontSize(8);
+      pdf.text(headers.map((header) => header.replace(/([A-Z])/g, " $1")).join(" | "));
+      pdf.moveDown(0.5);
+      rows.forEach((row: Record<string, unknown>) => {
+        pdf.text(headers.map((header) => {
+          const value = row[header];
+          if (value instanceof Date) return value.toLocaleString();
+          return String(value ?? "");
+        }).join(" | "), { width: pdf.page.width - 72 });
+      });
+    }
+    pdf.end();
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/vnd.ms-excel");
+  res.setHeader("Content-Disposition", `attachment; filename="${type}-report.xls"`);
+  const headers = rows.length ? Object.keys(rows[0]).filter((key) => key !== "id") : ["No records"];
+  const escapeXml = (value: unknown) => xmlEscape(value instanceof Date ? value.toISOString() : value);
+  const workbook = `<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="${xmlEscape(title)}"><Table>
+ <Row>${headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`).join("")}</Row>
+ ${rows.map((row: Record<string, unknown>) => `<Row>${headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(row[header])}</Data></Cell>`).join("")}</Row>`).join("")}
+ </Table></Worksheet>
+</Workbook>`;
+  res.send(workbook);
 }));
 
 api.get("/nhia/claims/individual", requireRole("admin"), asyncRoute(async (req, res) => {
