@@ -18,8 +18,8 @@ import {
   parameterReferenceRanges,
   resultEntries,
   users,
-} from "./db/schema";
-import { requireAuth, requireRole } from "./middleware";
+} from "./db/schema.js";
+import { requireAuth, requireRole } from "./middleware.js";
 
 export const api = Router();
 api.use(requireAuth);

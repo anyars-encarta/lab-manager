@@ -135,7 +135,7 @@ function App() {
               options={{
                 syncWithLocation: true,
                 warnWhenUnsavedChanges: true,
-                title: { text: "Encarta Lab Manager", icon: <FlaskConical /> },
+                title: { text: "Encarta", icon: <FlaskConical /> },
                 projectId: "PzJ7xv-V7qSg0-jCeiFi",
               }}
             >
@@ -165,7 +165,11 @@ function App() {
               <Toaster />
               <RefineKbar />
               <UnsavedChangesNotifier />
-              <DocumentTitleHandler />
+              <DocumentTitleHandler
+                handler={({ resource }) =>
+                  resource?.meta?.label ? `${resource.meta.label} | Encarta` : "Encarta"
+                }
+              />
             </Refine>
             <DevtoolsPanel />
           </DevtoolsProvider>

@@ -37,6 +37,10 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const port = Number(process.env.PORT || 8000);
-app.listen(port, () => {
-  console.log(`Laboratory backend listening on port ${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Laboratory backend listening on port ${port}`);
+  });
+}
+
+export default app;
