@@ -1966,6 +1966,7 @@ function RecordTable({
                         <Button
                           size="sm"
                           variant="outline"
+                          className="cursor-pointer"
                           onClick={() => onReceivePayment?.(row)}
                         >
                           Receive payment

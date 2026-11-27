@@ -53,9 +53,10 @@ export function Dashboard() {
       const response = await fetch(`${API_URL}/api/orders`, { credentials: "include" });
       if (!response.ok) throw new Error(`Orders request failed (${response.status})`);
       const data = await response.json();
-      if (!Array.isArray(data)) throw new Error("Invalid orders response");
+      const orderRows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : null;
+      if (!orderRows) throw new Error("Invalid orders response");
       if (generation === ordersGeneration.current) {
-        setOrders(data.slice(0, 6));
+        setOrders(orderRows.slice(0, 6));
         setOrdersLoaded(true);
       }
     } catch (error) {
