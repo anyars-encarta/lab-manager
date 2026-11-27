@@ -1446,6 +1446,116 @@ api.get("/reports/summary", requireRole("admin", "doctor", "account"), asyncRout
   });
 }));
 
+api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontdesk", "technician"), asyncRoute(async (_req, res) => {
+  const now = new Date();
+  const periodStart = new Date(now);
+  periodStart.setUTCDate(periodStart.getUTCDate() - 29);
+  periodStart.setUTCHours(0, 0, 0, 0);
+
+  const [
+    orderRows,
+    patientCountRows,
+    investigationCountRows,
+    recentPayments,
+    recentResultRows,
+    utilizationRows,
+  ] = await Promise.all([
+    db.select().from(labOrders)
+      .where(gte(labOrders.createdAt, periodStart))
+      .orderBy(desc(labOrders.createdAt)),
+    db.select({ count: sql<number>`count(*)::int` }).from(patients),
+    db.select({ count: sql<number>`count(*)::int` }).from(investigations).where(eq(investigations.active, true)),
+    db.select({
+      amount: payments.amount,
+      method: payments.method,
+      receivedAt: payments.receivedAt,
+    }).from(payments).where(gte(payments.receivedAt, periodStart)),
+    db.select({ id: resultEntries.id }).from(resultEntries)
+      .where(gte(resultEntries.enteredAt, periodStart)),
+    db.select({
+      investigationId: investigations.id,
+      name: investigations.name,
+      quantity: orderItems.quantity,
+    }).from(orderItems)
+      .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
+      .innerJoin(labOrders, eq(orderItems.orderId, labOrders.id))
+      .where(gte(labOrders.createdAt, periodStart)),
+  ]);
+
+  const dailyMap = new Map<string, { date: string; orders: number; billed: number; collected: number }>();
+  for (let offset = 29; offset >= 0; offset -= 1) {
+    const date = new Date(periodStart);
+    date.setUTCDate(date.getUTCDate() + (29 - offset));
+    dailyMap.set(date.toISOString().slice(0, 10), {
+      date: date.toLocaleDateString("en-GH", { month: "short", day: "numeric", timeZone: "UTC" }),
+      orders: 0,
+      billed: 0,
+      collected: 0,
+    });
+  }
+  for (const order of orderRows) {
+    const key = order.createdAt.toISOString().slice(0, 10);
+    const bucket = dailyMap.get(key);
+    if (bucket) {
+      bucket.orders += 1;
+      bucket.billed += numberValue(order.totalAmount);
+      bucket.collected += numberValue(order.paidAmount);
+    }
+  }
+
+  const statusCounts = ["draft", "awaiting_payment", "paid", "processing", "completed", "cancelled"].map((status) => ({
+    status: status.replace(/_/g, " "),
+    value: orderRows.filter((order) => order.status === status).length,
+  })).filter((item) => item.value > 0);
+
+  const paymentMap = new Map<string, number>();
+  for (const payment of recentPayments) {
+    const method = payment.method.replace(/_/g, " ");
+    paymentMap.set(method, (paymentMap.get(method) || 0) + numberValue(payment.amount));
+  }
+  const paymentBreakdown = Array.from(paymentMap.entries()).map(([method, amount]) => ({ method, amount }));
+
+  const investigationMap = new Map<string, { name: string; requests: number }>();
+  for (const item of utilizationRows) {
+    const current = investigationMap.get(item.investigationId) || { name: item.name, requests: 0 };
+    current.requests += Number(item.quantity || 1);
+    investigationMap.set(item.investigationId, current);
+  }
+  const topInvestigations = Array.from(investigationMap.values())
+    .sort((a, b) => b.requests - a.requests)
+    .slice(0, 8);
+
+  const totalBilled = orderRows.reduce((sum, order) => sum + numberValue(order.totalAmount), 0);
+  const totalCollected = orderRows.reduce((sum, order) => sum + numberValue(order.paidAmount), 0);
+  const outstanding = orderRows.reduce(
+    (sum, order) => sum + Math.max(0, numberValue(order.totalAmount) - numberValue(order.paidAmount)),
+    0,
+  );
+
+  res.json({
+    periodStart,
+    periodEnd: now,
+    kpis: {
+      patients: Number(patientCountRows[0]?.count || 0),
+      activeInvestigations: Number(investigationCountRows[0]?.count || 0),
+      totalOrders: orderRows.length,
+      completed: orderRows.filter((order) => order.status === "completed").length,
+      pending: orderRows.filter((order) => !["completed", "cancelled"].includes(order.status)).length,
+      insuredOrders: orderRows.filter((order) => order.isInsured).length,
+      resultEntries: recentResultRows.length,
+      totalBilled,
+      totalCollected,
+      outstanding,
+      payments: recentPayments.reduce((sum, payment) => sum + numberValue(payment.amount), 0),
+      paymentCount: recentPayments.length,
+    },
+    daily: Array.from(dailyMap.values()),
+    statusBreakdown: statusCounts,
+    paymentBreakdown,
+    topInvestigations,
+  });
+}));
+
 api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
   const type = typeof req.query.type === "string" ? req.query.type : "orders";
   const from = typeof req.query.from === "string" && req.query.from
