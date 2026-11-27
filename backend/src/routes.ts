@@ -43,6 +43,17 @@ const exclusiveEndDate = (dateValue: string) => {
   date.setUTCDate(date.getUTCDate() + 1);
   return date;
 };
+const normalizeExclusiveClaimEnd = (value: Date) => {
+  if (
+    value.getUTCHours() === 23 &&
+    value.getUTCMinutes() === 59 &&
+    value.getUTCSeconds() === 59
+  ) {
+    value.setUTCDate(value.getUTCDate() + 1);
+    value.setUTCHours(0, 0, 0, 0);
+  }
+  return value;
+};
 const isUnderThreeMonths = (birthDate: Date | null, at: Date = new Date()) => {
   if (!birthDate) return false;
   const cutoff = new Date(at);
@@ -2037,7 +2048,13 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
     claimPeriodEnd: z.iso.datetime(),
   }).parse(req.body);
   const start = new Date(body.claimPeriodStart);
-  const end = new Date(body.claimPeriodEnd);
+  const end = normalizeExclusiveClaimEnd(new Date(body.claimPeriodEnd));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return res.status(400).json({ error: "The claim period contains an invalid date" });
+  }
+  if (start >= end) {
+    return res.status(400).json({ error: "The claim period end must be after the start" });
+  }
   const batchFacility = (await db.select().from(facilities).orderBy(asc(facilities.name)).limit(1))[0];
   if (!batchFacility) return res.status(400).json({ error: "At least one facility is required" });
   const eligibleOrders = await db.select().from(labOrders).where(and(
