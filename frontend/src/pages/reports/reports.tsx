@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, Download, Printer, Search } from "lucide-react";
 import { Breadcrumb } from "@/components/refine-ui/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ export function ReportsPage() {
   const [data, setData] = useState<ReportData>({ rows: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const reportRequestGeneration = useRef(0);
 
   useEffect(() => {
     fetch(`${API_URL}/api/facilities`, { credentials: "include" })
@@ -64,24 +65,28 @@ export function ReportsPage() {
     if (from) values.set("from", from);
     if (to) values.set("to", to);
     if (facilityId) values.set("facilityId", facilityId);
-    if (status) values.set("status", status);
-    if (paymentStatus) values.set("paymentStatus", paymentStatus);
+    if (reportType === "orders" && status) values.set("status", status);
+    if (reportType === "orders" && paymentStatus) values.set("paymentStatus", paymentStatus);
     if (search.trim()) values.set("search", search.trim());
     return values;
   }, [reportType, from, to, facilityId, status, paymentStatus, search]);
 
   const generate = async () => {
+    const generation = ++reportRequestGeneration.current;
     setLoading(true);
     setError("");
     try {
       const response = await fetch(`${API_URL}/api/reports/data?${params.toString()}`, { credentials: "include" });
       if (!response.ok) throw new Error(`Report request failed (${response.status})`);
-      setData(await response.json());
+      const result = await response.json();
+      if (generation === reportRequestGeneration.current) setData(result);
     } catch (error) {
-      setData({ rows: [] });
-      setError(error instanceof Error ? error.message : "Unable to generate report");
+      if (generation === reportRequestGeneration.current) {
+        setData({ rows: [] });
+        setError(error instanceof Error ? error.message : "Unable to generate report");
+      }
     } finally {
-      setLoading(false);
+      if (generation === reportRequestGeneration.current) setLoading(false);
     }
   };
 

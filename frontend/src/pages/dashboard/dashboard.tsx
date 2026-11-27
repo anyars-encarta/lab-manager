@@ -59,6 +59,7 @@ type DashboardData = {
 export function Dashboard() {
   const { data: identity } = useGetIdentity<Identity>();
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [summaryError, setSummaryError] = useState("");
@@ -68,15 +69,20 @@ export function Dashboard() {
 
   const loadSummary = async () => {
     const generation = ++dashboardGeneration.current;
+    setDashboardLoaded(false);
     setSummaryError("");
     try {
       const response = await fetch(`${API_URL}/api/reports/dashboard`, { credentials: "include" });
       if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
       const data = await response.json();
-      if (generation === dashboardGeneration.current) setDashboard(data);
+      if (generation === dashboardGeneration.current) {
+        setDashboard(data);
+        setDashboardLoaded(true);
+      }
     } catch (error) {
       if (generation === dashboardGeneration.current) {
         setDashboard(null);
+        setDashboardLoaded(true);
         setSummaryError(error instanceof Error ? error.message : "Unable to load summary");
       }
     }
@@ -114,10 +120,10 @@ export function Dashboard() {
     { title: "Registered patients", value: dashboard?.kpis.patients ?? "—", detail: "All registered patients", icon: Users, color: "text-sky-600", bg: "bg-sky-50 dark:bg-sky-950/30" },
     { title: "Active investigations", value: dashboard?.kpis.activeInvestigations ?? "—", detail: "Available test services", icon: Microscope, color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
     { title: "Laboratory orders", value: dashboard?.kpis.totalOrders ?? "—", detail: "Last 30 days", icon: ClipboardCheck, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
-    { title: "Completed reports", value: dashboard?.kpis.completed ?? "—", detail: "Released in 30 days", icon: FlaskConical, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+    { title: "Completed reports", value: dashboard?.kpis.completed ?? "—", detail: "Completed orders created in 30 days", icon: FlaskConical, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
     { title: "Pending workflow", value: dashboard?.kpis.pending ?? "—", detail: "Orders not released", icon: Activity, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
     { title: "Insured orders", value: dashboard?.kpis.insuredOrders ?? "—", detail: "NHIS/insured requests", icon: ShieldCheck, color: "text-cyan-600", bg: "bg-cyan-50 dark:bg-cyan-950/30" },
-    { title: "Revenue collected", value: dashboard ? `GH₵ ${Number(dashboard.kpis.totalCollected).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—", detail: "Paid amounts in 30 days", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
+    { title: "Revenue collected", value: dashboard ? `GH₵ ${Number(dashboard.kpis.payments).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—", detail: "Payments received in 30 days", icon: Banknote, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
     { title: "Outstanding balance", value: dashboard ? `GH₵ ${Number(dashboard.kpis.outstanding).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—", detail: "Unpaid order balances", icon: CreditCard, color: "text-rose-600", bg: "bg-rose-50 dark:bg-rose-950/30" },
     { title: "Result entries", value: dashboard?.kpis.resultEntries ?? "—", detail: "Entered in 30 days", icon: HeartPulse, color: "text-fuchsia-600", bg: "bg-fuchsia-50 dark:bg-fuchsia-950/30" },
   ];
@@ -155,18 +161,24 @@ export function Dashboard() {
             <CardDescription>Daily laboratory activity for the last 30 days</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={dashboard?.daily || []}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
-                <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value: number | string, name: string) => name === "Orders" ? [value, name] : [`GH₵ ${Number(value).toLocaleString()}`, name]} />
-                <Legend />
-                <Area yAxisId="left" type="monotone" dataKey="orders" name="Orders" stroke="#2563eb" fill="#2563eb" fillOpacity={0.18} />
-                <Area yAxisId="right" type="monotone" dataKey="collected" name="Collected" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} />
-              </AreaChart>
-            </ResponsiveContainer>
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.daily.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dashboard.daily}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
+                  <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(value: number | string, name: string) => name === "Orders" ? [value, name] : [`GH₵ ${Number(value).toLocaleString()}`, name]} />
+                  <Legend />
+                  <Area yAxisId="left" type="monotone" dataKey="orders" name="Orders" stroke="#2563eb" fill="#2563eb" fillOpacity={0.18} />
+                  <Area yAxisId="right" type="monotone" dataKey="collected" name="Collected" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">No activity data</div>
+            )}
           </CardContent>
         </Card>
 
@@ -176,7 +188,9 @@ export function Dashboard() {
             <CardDescription>Current 30-day workflow mix</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {dashboard?.statusBreakdown.length ? (
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.statusBreakdown.length ? (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie data={dashboard.statusBreakdown} dataKey="value" nameKey="status" cx="50%" cy="46%" outerRadius={82} label>
@@ -202,7 +216,9 @@ export function Dashboard() {
             <CardDescription>Most requested tests in the last 30 days</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {dashboard?.topInvestigations.length ? (
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.topInvestigations.length ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dashboard.topInvestigations} layout="vertical" margin={{ left: 20, right: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -224,7 +240,9 @@ export function Dashboard() {
             <CardDescription>Revenue distribution for the last 30 days</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {dashboard?.paymentBreakdown.length ? (
+            {!dashboardLoaded ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading chart...</div>
+            ) : dashboard?.paymentBreakdown.length ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dashboard.paymentBreakdown}>
                   <CartesianGrid strokeDasharray="3 3" />

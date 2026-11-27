@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { auth } from "./auth.js";
@@ -1433,7 +1433,7 @@ api.get("/reports/summary", requireRole("admin", "doctor", "account"), asyncRout
     ? exclusiveEndDate(req.query.to)
     : new Date();
   const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : "";
-  const conditions = [gte(labOrders.createdAt, from), lte(labOrders.createdAt, to)];
+  const conditions = [gte(labOrders.createdAt, from), lt(labOrders.createdAt, to)];
   if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
   const rows = await db.select().from(labOrders).where(and(...conditions));
   res.json({
@@ -1499,7 +1499,13 @@ api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontde
     if (bucket) {
       bucket.orders += 1;
       bucket.billed += numberValue(order.totalAmount);
-      bucket.collected += numberValue(order.paidAmount);
+    }
+  }
+  for (const payment of recentPayments) {
+    const key = payment.receivedAt.toISOString().slice(0, 10);
+    const bucket = dailyMap.get(key);
+    if (bucket) {
+      bucket.collected += numberValue(payment.amount);
     }
   }
 
@@ -1526,7 +1532,8 @@ api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontde
     .slice(0, 8);
 
   const totalBilled = orderRows.reduce((sum, order) => sum + numberValue(order.totalAmount), 0);
-  const totalCollected = orderRows.reduce((sum, order) => sum + numberValue(order.paidAmount), 0);
+  const paymentTotal = recentPayments.reduce((sum, payment) => sum + numberValue(payment.amount), 0);
+  const totalCollected = paymentTotal;
   const outstanding = orderRows.reduce(
     (sum, order) => sum + Math.max(0, numberValue(order.totalAmount) - numberValue(order.paidAmount)),
     0,
@@ -1546,7 +1553,7 @@ api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontde
       totalBilled,
       totalCollected,
       outstanding,
-      payments: recentPayments.reduce((sum, payment) => sum + numberValue(payment.amount), 0),
+      payments: paymentTotal,
       paymentCount: recentPayments.length,
     },
     daily: Array.from(dailyMap.values()),
@@ -1556,25 +1563,25 @@ api.get("/reports/dashboard", requireRole("admin", "doctor", "account", "frontde
   });
 }));
 
-api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
-  const type = typeof req.query.type === "string" ? req.query.type : "orders";
-  const from = typeof req.query.from === "string" && req.query.from
-    ? new Date(`${req.query.from}T00:00:00Z`)
+const getReportData = async (query: Record<string, unknown>) => {
+  const type = typeof query.type === "string" ? query.type : "orders";
+  const from = typeof query.from === "string" && query.from
+    ? new Date(`${query.from}T00:00:00Z`)
     : null;
-  const to = typeof req.query.to === "string" && req.query.to
-    ? exclusiveEndDate(req.query.to)
+  const to = typeof query.to === "string" && query.to
+    ? exclusiveEndDate(query.to)
     : null;
-  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : "";
-  const status = typeof req.query.status === "string" ? req.query.status : "";
-  const paymentStatus = typeof req.query.paymentStatus === "string" ? req.query.paymentStatus : "";
-  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const facilityId = typeof query.facilityId === "string" ? query.facilityId : "";
+  const status = typeof query.status === "string" ? query.status : "";
+  const paymentStatus = typeof query.paymentStatus === "string" ? query.paymentStatus : "";
+  const search = typeof query.search === "string" ? query.search.trim() : "";
   const orderStatusFilter = status as "draft" | "awaiting_payment" | "paid" | "processing" | "completed" | "cancelled";
   const paymentStatusFilter = paymentStatus as "pending" | "partial" | "paid" | "refunded";
 
   if (type === "summary") {
     const conditions = [];
     if (from) conditions.push(gte(labOrders.createdAt, from));
-    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (to) conditions.push(lt(labOrders.createdAt, to));
     if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
     const rows = await db.select().from(labOrders)
       .where(conditions.length ? and(...conditions) : undefined);
@@ -1587,13 +1594,13 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
       totalCollected: rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0),
       outstandingBalance: rows.reduce((sum, row) => sum + Math.max(0, numberValue(row.totalAmount) - numberValue(row.paidAmount)), 0),
     };
-    return res.json({ rows: [summary], total: summary.totalBilled, collected: summary.totalCollected, period: { from, to } });
+    return { rows: [summary], total: summary.totalBilled, collected: summary.totalCollected, period: { from, to } };
   }
 
   if (type === "payments") {
     const conditions = [];
     if (from) conditions.push(gte(payments.receivedAt, from));
-    if (to) conditions.push(lte(payments.receivedAt, to));
+    if (to) conditions.push(lt(payments.receivedAt, to));
     if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
     if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
     if (search) conditions.push(or(
@@ -1617,13 +1624,13 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(payments.receivedAt));
     const total = rows.reduce((sum, row) => sum + numberValue(row.amount), 0);
-    return res.json({ rows, total, period: { from, to } });
+    return { rows, total, period: { from, to } };
   }
 
   if (type === "investigations") {
     const conditions = [];
     if (from) conditions.push(gte(labOrders.createdAt, from));
-    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (to) conditions.push(lt(labOrders.createdAt, to));
     if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
     const rows = await db.select({
       id: investigations.id,
@@ -1651,13 +1658,13 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
       grouped.set(row.id, current);
     }
     const result = Array.from(grouped.values()).sort((a, b) => b.requests - a.requests);
-    return res.json({ rows: result, total: result.reduce((sum, row) => sum + row.revenue, 0), period: { from, to } });
+    return { rows: result, total: result.reduce((sum, row) => sum + row.revenue, 0), period: { from, to } };
   }
 
   if (type === "patients") {
     const conditions = [];
     if (from) conditions.push(gte(patients.createdAt, from));
-    if (to) conditions.push(lte(patients.createdAt, to));
+    if (to) conditions.push(lt(patients.createdAt, to));
     if (facilityId) conditions.push(eq(patients.facilityId, facilityId));
     if (search) conditions.push(or(
       ilike(patients.patientNumber, `%${search}%`),
@@ -1678,13 +1685,13 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
     }).from(patients)
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(patients.createdAt));
-    return res.json({ rows, total: rows.length, period: { from, to } });
+    return { rows, total: rows.length, period: { from, to } };
   }
 
   if (type === "results") {
     const conditions = [];
-    if (from) conditions.push(gte(labOrders.createdAt, from));
-    if (to) conditions.push(lte(labOrders.createdAt, to));
+    if (from) conditions.push(gte(resultEntries.enteredAt, from));
+    if (to) conditions.push(lt(resultEntries.enteredAt, to));
     if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
     const rows = await db.select({
       id: resultEntries.id,
@@ -1706,12 +1713,12 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
       .innerJoin(investigations, eq(orderItems.investigationId, investigations.id))
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(resultEntries.enteredAt));
-    return res.json({ rows, total: rows.length, period: { from, to } });
+    return { rows, total: rows.length, period: { from, to } };
   }
 
   const conditions = [];
   if (from) conditions.push(gte(labOrders.createdAt, from));
-  if (to) conditions.push(lte(labOrders.createdAt, to));
+  if (to) conditions.push(lt(labOrders.createdAt, to));
   if (facilityId) conditions.push(eq(labOrders.facilityId, facilityId));
   if (status) conditions.push(eq(labOrders.status, orderStatusFilter));
   if (paymentStatus) conditions.push(eq(labOrders.paymentStatus, paymentStatusFilter));
@@ -1737,24 +1744,21 @@ api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(a
     .orderBy(desc(labOrders.createdAt));
   const total = rows.reduce((sum, row) => sum + numberValue(row.totalAmount), 0);
   const collected = rows.reduce((sum, row) => sum + numberValue(row.paidAmount), 0);
-  return res.json({ rows, total, collected, period: { from, to } });
+  return { rows, total, collected, period: { from, to } };
+};
+
+api.get("/reports/data", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
+  res.json(await getReportData(req.query as unknown as Record<string, unknown>));
 }));
 
 api.get("/reports/export", requireRole("admin", "doctor", "account"), asyncRoute(async (req, res) => {
   const format = req.query.format === "pdf" ? "pdf" : "excel";
   const type = typeof req.query.type === "string" ? req.query.type : "orders";
-  const dataUrl = new URL(`${req.protocol}://${req.get("host")}/api/reports/data`);
-  for (const [key, value] of Object.entries(req.query)) {
-    if (typeof value === "string") dataUrl.searchParams.set(key, value);
-  }
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
-  const response = await fetch(`${baseUrl}/api/reports/data?${new URLSearchParams(
-    Object.fromEntries(Object.entries(req.query).filter(([key]) => key !== "format").map(([key, value]) => [key, String(value)])),
-  ).toString()}`, {
-    headers: { cookie: req.headers.cookie || "" },
-  });
-  if (!response.ok) throw new Error("Unable to generate report data");
-  const report = await response.json();
+  const report = await getReportData(
+    Object.fromEntries(
+      Object.entries(req.query).filter(([key]) => key !== "format" && key !== "download"),
+    ) as Record<string, unknown>,
+  );
   const rows = Array.isArray(report.rows) ? report.rows : [];
   const title = `${type.charAt(0).toUpperCase()}${type.slice(1)} report`;
 
@@ -2038,7 +2042,7 @@ api.post("/nhia/claims", requireRole("admin"), asyncRoute(async (req, res) => {
   if (!batchFacility) return res.status(400).json({ error: "At least one facility is required" });
   const eligibleOrders = await db.select().from(labOrders).where(and(
     gte(labOrders.createdAt, start),
-    lte(labOrders.createdAt, end),
+    lt(labOrders.createdAt, end),
   ));
   const profile = (await db.select().from(laboratoryProfiles).limit(1))[0];
   const nhiaPayload = await Promise.all(eligibleOrders.map(async (order) => {
